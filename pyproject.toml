@@ -1,0 +1,61 @@
+[project]
+name = "chz"
+version = "0.1.0"
+description = "chz is a library for managing configuration"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "Shantanu Jain"}, {email = "shantanu@openai.com"}]
+dependencies = [
+    "typing-extensions>=4.7",
+]
+requires-python = ">=3.11"
+
+[project.urls]
+homepage = "https://github.com/openai/chz"
+repository = "https://github.com/openai/chz"
+changelog = "https://github.com/openai/chz/blob/main/CHANGELOG.md"
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=62.4", "wheel"]
+
+[tool.setuptools.packages.find]
+include = ["chz*"]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-p", "no:pytest_mock_resources", "-p", "no:httpx", "-p", "no:aiohttp", "-p", "no:faker",
+    "-p", "no:ddtrace", "-p", "no:ddtrace.pytest_bdd", "-p", "no:ddtrace.pytest_benchmark",
+    "-p", "no:hypothesispytest", "-p", "no:anyio", "-p", "no:benchmark", "-p", "no:pytest_mock",
+    "-p", "no:typeguard", "-p", "no:asyncio",
+]
+
+[tool.mypy]
+strict = true
+
+disallow_untyped_decorators = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+
+disallow_subclassing_any = false
+disallow_incomplete_defs = false
+disallow_untyped_defs = false
+warn_return_any = false
+
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["chz.tiepin"]
+ignore_errors = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if MYPY",
+    "if TYPE_CHECKING",
+    "elif TYPE_CHECKING",
+]
