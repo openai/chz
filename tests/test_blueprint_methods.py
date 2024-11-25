@@ -105,3 +105,16 @@ def test_methods_entrypoint_polymorphic():
     assert chz.methods_entrypoint(
         RunDefault, argv=["launch", "self=RunDefaultChild", "cluster=big"]
     ) == ("launch", RunDefaultChild(), "big")
+
+
+def test_methods_entrypoint_transform():
+    def transform(blueprint, target, method):
+        if method == "launch":
+            return blueprint.apply({"name": "job"}, subpath="self")
+        return blueprint
+
+    assert chz.methods_entrypoint(Run1, argv=["launch", "cluster=big"], transform=transform) == (
+        "launch",
+        Run1(name="job"),
+        "big",
+    )

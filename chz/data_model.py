@@ -125,7 +125,26 @@ def __delattr__(self, name):
     raise FrozenInstanceError(f"Cannot delete field {name!r}")
 
 
-@dataclasses._recursive_repr  # type: ignore
+def _recursive_repr(user_function):
+    import threading
+
+    repr_running = set()
+
+    @functools.wraps(user_function)
+    def wrapper(self):
+        key = id(self), threading.get_ident()
+        if key in repr_running:
+            return "..."
+        repr_running.add(key)
+        try:
+            result = user_function(self)
+        finally:
+            repr_running.discard(key)
+        return result
+
+    return wrapper
+
+
 def __repr__(self) -> str:
     def field_repr(field: Field) -> str:
         # use x_name so that repr can be copy-pasted to create the same object
@@ -578,7 +597,7 @@ def beta_to_blueprint_values(obj) -> Any:
     """
     blueprint_values = {}
     for field_name, field_info in obj.__chz_fields__.items():
-        field_value = getattr(obj, field_name)
+        field_value = getattr(obj, field_info.x_name)
         if hasattr(field_value, "__chz_fields__"):
             if (
                 field_info.meta_factory is not None

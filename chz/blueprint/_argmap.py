@@ -36,6 +36,13 @@ class Layer:
         yield from ((k, False) for k in self.qualified)
         yield from ((k, True) for k in self.wildcard)
 
+    def nest_subpath(self, subpath: str | None) -> Layer:
+        if subpath is None:
+            return self
+        return Layer(
+            {join_arg_path(subpath, k): v for k, v in self._params.items()}, self.layer_name
+        )
+
     def __repr__(self) -> str:
         return f"<Layer {self.layer_name} {self.qualified | self.wildcard}>"
 
@@ -78,8 +85,8 @@ class ArgumentMap:
         """
         assert not path.endswith(".")
 
-        wildcard_literal = ".".join(path.split(".")[-1:])
-        assert wildcard_literal
+        wildcard_literal = path.split(".")[-1]
+        # assert wildcard_literal
         assert path.endswith(wildcard_literal)
 
         ret = []
@@ -91,29 +98,35 @@ class ArgumentMap:
                     i = key.rfind(wildcard_literal)
                     if i == -1:
                         continue
-                    # This is not too complicated:
+                    # The strict case is not complicated
                     if wildcard_key_to_regex(key).fullmatch(path):
                         if not strict:
                             ret.append("")
                             assert wildcard_key_to_regex(key).fullmatch(path + ret[-1])
                         continue
-                    # This needs a little thinking about:
+                    # This needs a little thinking about.
+                    # Say path is "foo.bar" and key is "...bar...baz"
+                    # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
+                    # Since it does, we append "...baz"
                     if (
                         i + len(wildcard_literal) < len(key)
                         and key[i + len(wildcard_literal)] == "."
                         and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
                     ):
-                        ret.append(key[i + len(wildcard_literal) :])
-                        assert wildcard_key_to_regex(key).fullmatch(path + ret[-1])
+                        assert i == 0 or key[i - 1] == "."
+                        ret.append(key[i + len(wildcard_literal) + 1 :])
+                        assert wildcard_key_to_regex(key).fullmatch(join_arg_path(path, ret[-1]))
                 else:
                     if key == path:
                         if not strict:
                             ret.append("")
                             assert key == path + ret[-1]
                         continue
-                    if key.startswith(path + "."):
-                        ret.append(key.removeprefix(path))
-                        assert key == path + ret[-1]
+                    if not path:
+                        ret.append(key)
+                    elif key.startswith(path + "."):
+                        ret.append(key.removeprefix(path + "."))
+                        assert key == join_arg_path(path, ret[-1])
         return ret
 
     def get_kv(self, exact_key: str) -> _FoundArgument | None:
@@ -184,3 +197,11 @@ class ArgumentMap:
 
     def __repr__(self) -> str:
         return "ArgumentMap(\n" + "\n".join("    " + repr(layer) for layer in self._layers) + "\n)"
+
+
+def join_arg_path(parent: str, child: str) -> str:
+    if not parent:
+        return child
+    if child.startswith("."):
+        return parent + child
+    return parent + "." + child

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Final, Generic, Mapping, Protocol, TypeVar
 
 import chz
-from chz.blueprint._argmap import ArgumentMap, Layer
+from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
 from chz.blueprint._argv import argv_to_blueprint_args
 from chz.blueprint._entrypoint import (
     EntrypointHelpException,
@@ -101,21 +101,41 @@ class Blueprint(Generic[_T_cov]):
         return Blueprint(self.target).apply(self)
 
     def apply(
-        self, values: Blueprint[_T_cov] | Mapping[str, Any], layer_name: str | None = None
+        self,
+        values: Blueprint[_T_cov] | Mapping[str, Any],
+        layer_name: str | None = None,
+        *,
+        subpath: str | None = None,
+        strict: bool = False,
     ) -> Blueprint[_T_cov]:
-        """Modify this Blueprint by partially applying some arguments."""
+        """Modify this Blueprint by partially applying some arguments.
+
+        Args:
+            values: The values to partially apply to this Blueprint
+            layer_name: The name of the layer to add (allows identification of the source of values)
+            subpath: A subpath to nest the argument names under
+            strict: Whether to eagerly check for extraneous arguments. This may not work well in
+                cases where a polymorphic field is applied later.
+        """
         if isinstance(values, Mapping):
-            self._arg_map.add_layer(Layer(values, layer_name))
+            self._arg_map.add_layer(Layer(values, layer_name).nest_subpath(subpath))
+
         elif isinstance(values, Blueprint):
-            if values.target is not self.target:
-                raise ValueError(
-                    f"Cannot apply Blueprint for {type_repr(values.target)} to Blueprint for "
-                    f"{type_repr(self.target)}"
-                )
+            if subpath is None:
+                if values.target is not self.target:
+                    raise ValueError(
+                        f"Cannot apply Blueprint for {type_repr(values.target)} to Blueprint for "
+                        f"{type_repr(self.target)}"
+                    )
             for layer in values._arg_map._layers:
-                self._arg_map.add_layer(layer)
+                self._arg_map.add_layer(layer.nest_subpath(subpath))
         else:
             raise TypeError(f"Expected dict or Blueprint, got {type(values)}")
+
+        if strict:
+            r = self._make_lazy()
+            self._arg_map.check_extraneous(r.used_args, r.all_params.keys(), target=self.target)
+
         return self
 
     def apply_from_argv(
@@ -223,6 +243,12 @@ class Blueprint(Generic[_T_cov]):
                     found_arg_str = type_repr(r.meta_factory_value[param_path]) + " (meta_factory)"
                 elif param.default is not None:
                     found_arg_str = param.default.to_help_str() + " (default)"
+                elif (
+                    param.meta_factory is not None
+                    and (factory := param.meta_factory.unspecified_factory()) is not None
+                    and factory is not param.type
+                ):
+                    found_arg_str = type_repr(factory) + " (blueprint_unspecified)"
                 else:
                     found_arg_str = "-"
             else:
@@ -431,8 +457,10 @@ def _collect_variadic_params(
 
     elements = set()
     for subpath in arg_map.subpaths(obj_path, strict=True):
-        element = subpath.split(".")[1]
-        if element:
+        assert subpath
+        if subpath[0] != ".":
+            element = subpath.split(".")[0]
+            assert element
             elements.add(element)
 
     if obj_origin in (list, tuple, collections.abc.Sequence):
@@ -592,16 +620,12 @@ def _construct_blueprint(
     #   specified. In theory, this is unnecessary because `__init__` will raise an error if
     #   a required param is missing, but this improves diagnostics.
 
-    params = _collect_params(obj)
-
-    if isinstance(params, ConstructionError):
-        # We failed to find parameters the normal way. Let's check if we can find
-        # variadic parameters from a sequence type like list or tuple.
-        # This involves a dance with arg_map, where the number of items is determined by what is
-        # passed to arg_map.
-        result = _collect_variadic_params(obj, obj_path, arg_map)
-        if result is not None:
-            params, obj, _ = result
+    result = _collect_variadic_params(obj, obj_path, arg_map)
+    params: list[_Param] | ConstructionError
+    if result is not None:
+        params, obj, _ = result
+    else:
+        params = _collect_params(obj)
 
     if isinstance(params, ConstructionError):
         return params
@@ -706,6 +730,7 @@ def _construct_arg_for_param(
                     and all(p.default is not None for p in sub_all_params.values())
                 ):
                     assert not sub_missing_params
+                    meta_factory_value[param_path] = factory
                     return (param_path, value_mapping)
 
                 # If we have a default, make sure we don't extend missing_params
@@ -806,7 +831,7 @@ def _construct_arg_for_param(
                 if cast_error is None:
                     subpaths = arg_map.subpaths(param_path, strict=True)
                     assert subpaths
-                    cast_error = f"Not a value, since subparameters were provided (e.g. {param_path + subpaths[0]!r})"
+                    cast_error = f"Not a value, since subparameters were provided (e.g. {join_arg_path(param_path, subpaths[0])!r})"
                 raise InvalidBlueprintArg(
                     f"Could not interpret argument {spec.value!r} provided for param {param_path!r}...\n\n"
                     f"- Failed to interpret it as a value:\n{cast_error}\n\n"

@@ -494,6 +494,45 @@ def test_blueprint_values():
         == r
     )
 
+    # This test ensures that we handle properly:
+    # - default_factory
+    # - munged values
+    # - castable values
+    @chz.chz
+    class T:
+        default_factory: str = chz.field(default_factory=lambda: "?")
+        default_value: str = chz.field(default="!")
+        munged_value: str = chz.field(default="?", munger=lambda instance, value: value + "!!")
+
+    t = T(munged_value="Hello")
+    assert chz.Blueprint(T).apply(chz.beta_to_blueprint_values(t)).make() == t
+
+    # This test is dedicated to testing that `x_type`/`blueprint_cast` works fine
+    @chz.chz
+    class U:
+        value: int = chz.field(x_type=str, blueprint_cast=int)
+
+    u = U(value="7")
+
+    # The type of the blueprint should be the one we are supposed to pass in the blueprint
+    # Not the one after instantiation
+    assert chz.beta_to_blueprint_values(u)["value"] == "7"
+
+    # This test verifies that derived properties aren't serialized and X_ fields are not exposed
+    @chz.chz
+    class W:
+        value: int
+
+        @chz.init_property
+        def value_2(self) -> int:
+            return self.value * 2
+
+    w = W(value=5)
+    bp_args = chz.beta_to_blueprint_values(w)
+    assert "value_2" not in bp_args
+    assert "value" in bp_args
+    assert w.value_2 == 10
+
 
 def test_blueprint_values_polymorphic():
     @chz.chz

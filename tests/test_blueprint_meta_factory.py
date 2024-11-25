@@ -161,6 +161,20 @@ def test_meta_factory_blueprint_unspecified():
         .make()
     ) == Main(field=Child2(required0=0, required2=2))
 
+    assert (
+        chz.Blueprint(Main).get_help()
+        == """\
+WARNING: Missing required arguments for parameter(s): field.required0, field.required2
+
+Entry point: test_blueprint_meta_factory:test_meta_factory_blueprint_unspecified.<locals>.Main
+
+Arguments:
+  field            test_blueprint_meta_factory:test_meta_factory_blueprint_unspecified.<locals>.Parent                   test_blueprint_meta_factory:test_meta_factory_blueprint_unspecified.<locals>.Child2 (blueprint_unspecified)
+  field.required0  int                                       -
+  field.required2  int                                       -
+"""
+    )
+
 
 def test_meta_factory_blueprint_unspecified_more():
     @chz.chz
@@ -200,6 +214,27 @@ def test_meta_factory_blueprint_unspecified_more():
     # Lastly, check that it's okay to override the fields with custom Sub classes
     config = chz.Blueprint(MyConfig).apply_from_argv(["sub=MySub2", "sub2=MySub"]).make()
     assert config == MyConfig(sub=MySub2(x=3), sub2=MySub(x=2))
+
+
+def test_meta_factory_blueprint_unspecified_all_default_help():
+    @chz.chz
+    class X:
+        value: int = 0
+
+    @chz.chz
+    class Main:
+        field: object = chz.field(blueprint_unspecified=X)
+
+    assert (
+        chz.Blueprint(Main).get_help()
+        == """\
+Entry point: test_blueprint_meta_factory:test_meta_factory_blueprint_unspecified_all_default_help.<locals>.Main
+
+Arguments:
+  field        object  test_blueprint_meta_factory:test_meta_factory_blueprint_unspecified_all_default_help.<locals>.X (meta_factory)
+  field.value  int     0 (default)
+"""
+    )
 
 
 def test_meta_factory_subclass_generic():

@@ -1,3 +1,4 @@
+import collections
 from typing import AbstractSet, Any, Callable, TypeVar
 
 from chz.blueprint._entrypoint import InvalidBlueprintArg
@@ -38,36 +39,45 @@ class Thunk(Evaluatable):
 def evaluate(value_mapping: dict[str, Evaluatable]) -> Any:
     assert "" in value_mapping
 
-    # TODO: guard against infinite recursion
+    refs_in_progress = collections.OrderedDict[str, None]()
 
     def inner(ref: str) -> Any:
-        value = value_mapping[ref]
-        assert isinstance(value, Evaluatable)
+        if ref in refs_in_progress:
+            cycle = " -> ".join(list(refs_in_progress.keys())[1:] + [ref])
+            raise RecursionError(f"Detected cyclic reference: {cycle}")
 
-        if isinstance(value, Value):
-            return value.value
+        refs_in_progress[ref] = None
+        try:
+            value = value_mapping[ref]
+            assert isinstance(value, Evaluatable)
 
-        if isinstance(value, ParamRef):
-            try:
-                ret = inner(value.ref)
-            except Exception as e:
-                e.add_note(f" (when dereferencing {ref!r})")
-                raise
-            assert not isinstance(ret, Evaluatable)
-            value_mapping[ref] = Value(ret)
-            return ret
+            if isinstance(value, Value):
+                return value.value
 
-        if isinstance(value, Thunk):
-            kwargs = {}
-            for k, v in value.kwargs.items():
-                assert isinstance(v, ParamRef)
+            if isinstance(value, ParamRef):
                 try:
-                    kwargs[k] = inner(v.ref)
+                    ret = inner(value.ref)
                 except Exception as e:
-                    e.add_note(f" (when evaluating argument {k!r} for {type_repr(value.fn)})")
+                    e.add_note(f" (when dereferencing {ref!r})")
                     raise
-            ret = value.fn(**kwargs)
-            return ret
+                assert not isinstance(ret, Evaluatable)
+                value_mapping[ref] = Value(ret)
+                return ret
+
+            if isinstance(value, Thunk):
+                kwargs = {}
+                for k, v in value.kwargs.items():
+                    assert isinstance(v, ParamRef)
+                    try:
+                        kwargs[k] = inner(v.ref)
+                    except Exception as e:
+                        e.add_note(f" (when evaluating argument {k!r} for {type_repr(value.fn)})")
+                        raise
+                ret = value.fn(**kwargs)
+                return ret
+        finally:
+            item = refs_in_progress.popitem()
+            assert item[0] == ref
 
         raise AssertionError
 

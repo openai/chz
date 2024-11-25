@@ -3,6 +3,7 @@
 import collections.abc
 import enum
 import fractions
+import pathlib
 import re
 import sys
 import typing
@@ -719,6 +720,34 @@ def test_try_cast_list():
         _simplistic_try_cast("[1,str]", list)
 
 
+def test_try_cast_sequence_iterable():
+    for origin in {
+        collections.abc.Sequence,
+        collections.abc.Iterable,
+        typing.Sequence,
+        typing.Iterable,
+    }:
+        assert _simplistic_try_cast("1", origin) == (1,)
+        assert _simplistic_try_cast("1,str", origin) == (1, "str")
+        assert _simplistic_try_cast("1,2", origin[int]) == (1, 2)
+        assert _simplistic_try_cast("1,2", origin[str]) == ("1", "2")
+
+        assert _simplistic_try_cast("[1]", origin) == [1]
+        assert _simplistic_try_cast("[1,'str']", origin) == [1, "str"]
+        assert _simplistic_try_cast("[1,2]", origin[int]) == [1, 2]
+
+        assert _simplistic_try_cast("(1,)", origin) == (1,)
+        assert _simplistic_try_cast("(1,'str')", origin) == (1, "str")
+        assert _simplistic_try_cast("(1,2)", origin[int]) == (1, 2)
+
+        with pytest.raises(CastError, match=r"Could not cast '\(1\)' to \w+"):
+            _simplistic_try_cast("(1)", origin)
+        with pytest.raises(CastError, match=r"Could not cast '\[1,2\]' to \w+\[str\]"):
+            _simplistic_try_cast("[1,2]", origin[str])
+        with pytest.raises(CastError, match=r"Could not cast '\[1,str\]' to \w+"):
+            _simplistic_try_cast("[1,str]", origin)
+
+
 def test_try_cast_tuple_unpack():
     # fmt: off
     assert _simplistic_try_cast("1,2,3", tuple[int, *tuple[str, int]]) == (1, "2", 3)
@@ -786,6 +815,10 @@ def test_try_cast_fractions():
     assert _simplistic_try_cast("1/2", fractions.Fraction) == fractions.Fraction(1, 2)
     assert _simplistic_try_cast("1", fractions.Fraction) == fractions.Fraction(1)
     assert _simplistic_try_cast("1.5", fractions.Fraction) == fractions.Fraction(3, 2)
+
+
+def test_try_cast_pathlib():
+    assert _simplistic_try_cast("foo", pathlib.Path) == pathlib.Path("foo")
 
 
 def test_approx_type_hash():

@@ -70,3 +70,20 @@ def test_blueprint_reference_wildcard():
 
     obj = chz.Blueprint(Main).apply_from_argv(["...name@=a.b.name", "a.b.name=foo"]).make()
     assert obj == Main(name="foo", a=A(name="foo", b=B(name="foo")))
+
+
+def test_blueprint_reference_cycle():
+    @chz.chz
+    class Main:
+        a: int
+        b: int
+
+    with pytest.raises(RecursionError, match="Detected cyclic reference: a -> b -> a"):
+        chz.Blueprint(Main).apply_from_argv(["a@=b", "b@=a"]).make()
+
+    @chz.chz
+    class Main:
+        a: int
+
+    with pytest.raises(RecursionError, match="Detected cyclic reference: a -> a"):
+        chz.Blueprint(Main).apply_from_argv(["a@=a"]).make()

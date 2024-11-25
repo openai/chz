@@ -1,7 +1,7 @@
 import pytest
 
 from chz.blueprint import Blueprint, beta_blueprint_to_argv
-from chz.blueprint._argmap import ArgumentMap, Layer
+from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
 from chz.blueprint._wildcard import _wildcard_key_match, wildcard_key_to_regex
 
 
@@ -50,6 +50,15 @@ def test_wildcard_key_match():
     assert not wildcard_key_to_regex("...a...b...a").fullmatch("a...b...a...b...b...a.z")
 
 
+def test_join_arg_path():
+    assert join_arg_path("parent", "child") == "parent.child"
+    assert join_arg_path("grand.parent", "child") == "grand.parent.child"
+    assert join_arg_path("parent", "...child") == "parent...child"
+    assert join_arg_path("grand...parent", "child") == "grand...parent.child"
+    assert join_arg_path("", "child") == "child"
+    assert join_arg_path("", "...child") == "...child"
+
+
 def test_arg_map():
     layer = Layer({"a.b.c": 0, "a.b.c.one": 1, "a.b.c.two": 2}, None)
     arg_map = ArgumentMap([layer])
@@ -60,8 +69,8 @@ def test_arg_map():
     assert arg_map.get_kv("a.b.c.zero") == None
     assert arg_map.get_kv("a.b.d") == None
 
-    assert arg_map.subpaths("a.b.c") == [".one", ".two", ""]
-    assert arg_map.subpaths("a.b.c", strict=True) == [".one", ".two"]
+    assert arg_map.subpaths("a.b.c") == ["one", "two", ""]
+    assert arg_map.subpaths("a.b.c", strict=True) == ["one", "two"]
     assert arg_map.subpaths("a.b.c.one") == [""]
     assert arg_map.subpaths("a.b.c.one", strict=True) == []
 
@@ -77,7 +86,7 @@ def test_arg_map():
     assert arg_map.get_kv("a.b.c.one").key == "a...c.one"
     assert arg_map.get_kv("a.b.b.b.b.c.one").key == "a...c.one"
 
-    assert arg_map.subpaths("a.b.c") == [".one", ".two"]
+    assert arg_map.subpaths("a.b.c") == ["one", "two"]
     assert arg_map.subpaths("a.b.c.one") == [""]
     assert arg_map.subpaths("a.b.c.one", strict=True) == []
 

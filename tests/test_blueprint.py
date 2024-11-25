@@ -53,6 +53,23 @@ def test_entrypoint_nested():
     assert chz.nested_entrypoint(main, argv=argv) == [X(a=1, b="str", c=1)]
 
 
+def test_apply_strictness():
+    """Test strictness of application when configured and non-strictness when not."""
+
+    @chz.chz
+    class X:
+        hello: int = 5
+
+    # misspelled! No error on application, but error on make.
+    misspelled_bp = chz.Blueprint(X).apply({"hllo": 1})
+    with pytest.raises(ExtraneousBlueprintArg):
+        misspelled_bp.make()
+
+    # In strict mode, we get an error on apply.
+    with pytest.raises(ExtraneousBlueprintArg):
+        chz.Blueprint(X).apply({"hllo": 1}, strict=True)
+
+
 def test_basic_function_blueprint():
     def foo(a: int, b: int | str, c: bool = False, d: bytes = b""):
         return locals()
@@ -554,3 +571,32 @@ Not a value, since subparameters were provided \(e.g. 'a.field'\)
 No subclass of test_blueprint:test_blueprint_castable_but_subpaths.<locals>.A named 'works'""",
     ):
         chz.Blueprint(Main).apply({"a": Castable("works"), "a.field": Castable("field")}).make()
+
+
+def test_blueprint_apply_subpath():
+    @chz.chz
+    class A:
+        field: int
+
+    @chz.chz
+    class AA:
+        a: A
+
+    @chz.chz
+    class Main:
+        a: AA
+        field: int = 0
+
+    assert chz.Blueprint(Main).apply({"field": 1}, subpath="a.a").make() == Main(
+        a=AA(a=A(field=1)), field=0
+    )
+
+    assert chz.Blueprint(Main).apply({"...field": 1}, subpath="").make() == Main(
+        a=AA(a=A(field=1)), field=1
+    )
+    assert chz.Blueprint(Main).apply({"...field": 1}, subpath="a").make() == Main(
+        a=AA(a=A(field=1)), field=0
+    )
+
+    with pytest.raises(ExtraneousBlueprintArg, match=r"Extraneous argument 'b.field' to Blueprint"):
+        chz.Blueprint(Main).apply({"field": 1}, subpath="b").make()

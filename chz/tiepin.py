@@ -340,13 +340,13 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
         except ValueError as e:
             raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}") from e
 
-    if origin is list:
+    if origin is list or origin is collections.abc.Sequence or origin is collections.abc.Iterable:
         if not inst_str:
             return []
         args = getattr(typ, "__args__", ())
         item_type = args[0] if args else typing.Any
 
-        if inst_str[0] == "[":
+        if inst_str[0] in ("[", "("):
             try:
                 value = ast.literal_eval(inst_str)
             except (ValueError, SyntaxError):
@@ -356,7 +356,10 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
             raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
 
         inst_items = inst_str.split(",") if inst_str else []
-        return [_simplistic_try_cast(item, item_type) for item in inst_items]
+        ret = [_simplistic_try_cast(item, item_type) for item in inst_items]
+        if origin is list:
+            return ret
+        return tuple(ret)
 
     if origin is tuple:
         args = getattr(typ, "__args__", ())
@@ -423,6 +426,12 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
                 return fractions.Fraction(inst_str)
             except ValueError as e:
                 raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}") from e
+
+    if "pathlib" in sys.modules:
+        import pathlib
+
+        if origin is pathlib.Path:
+            return pathlib.Path(inst_str)
 
     if not isinstance(origin, type):
         raise CastError(f"Unrecognised type object {type_repr(typ)}")

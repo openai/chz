@@ -104,7 +104,12 @@ def nested_entrypoint(
 
 
 @exit_on_entrypoint_error
-def methods_entrypoint(target: type[_T], *, argv: list[str] | None = None) -> _T:
+def methods_entrypoint(
+    target: type[_T],
+    *,
+    argv: list[str] | None = None,
+    transform: Callable[[chz.Blueprint[Any], Any, str], chz.Blueprint[Any]] | None = None,
+) -> _T:
     """Easy way to create a script entrypoint using chz for methods on a class.
 
     For example, given main.py:
@@ -147,7 +152,11 @@ def methods_entrypoint(target: type[_T], *, argv: list[str] | None = None) -> _T
                 meth_doc = meth_doc.strip().split("\n", 1)[0]
                 output(f"  {name}  {meth_doc}".rstrip())
         raise EntrypointHelpException(f.getvalue())
-    return chz.Blueprint(getattr(target, argv[0])).make_from_argv(argv[1:])
+
+    blueprint = chz.Blueprint(getattr(target, argv[0]))
+    if transform is not None:
+        blueprint = transform(blueprint, target, argv[0])
+    return blueprint.make_from_argv(argv[1:])
 
 
 def _resolve_annotation(annotation: Any, func: Any) -> Any:
