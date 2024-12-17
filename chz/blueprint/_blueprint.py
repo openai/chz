@@ -28,7 +28,6 @@ from chz.blueprint._lazy import (
     check_reference_targets,
     evaluate,
 )
-from chz.factories import MetaFromString
 from chz.field import Field
 from chz.tiepin import (
     CastError,
@@ -75,11 +74,30 @@ class Reference(SpecialArg):
 
 @dataclass(frozen=True)
 class _MakeResult:
-    # See _construct_blueprint for details
+    # `value_mapping` is a dictionary mapping from parameter paths to Evaluatable values.
+    # This ultimately contains all the kinds of values we will use in instantiation.
+    # See chz.blueprint._lazy.evaluate for an example of using Evaluatable.
     value_mapping: dict[str, Evaluatable]
+
+    # `all_params` is a dictionary containing all parameters we discover, mapping from that param
+    # path to the parameter. Note what parameters we discover will depend on polymorphic
+    # construction via meta_factories. We use all_params to provide a useful --help (and various
+    # other things, e.g. detect clobbering when checking for extraneous arguments)
     all_params: dict[str, _Param]
+
+    # `used_args` is a set of (key, layer_index) tuples that we use to track which arguments from
+    # arg_map we've used. We use this to check for extraneous arguments.
     used_args: set[tuple[str, int]]
+
+    # `meta_factory_value` records what meta_factory we're using. This makes --help more
+    # understandable in the presence of polymorphism, especially when factories come from
+    # blueprint_unspecified. It's conceptually the same information as in Thunk.fn in value_mapping,
+    # but preserves user input for variadics or generics (instead of being a constructor function)
     meta_factory_value: dict[str, Any]
+
+    # `missing_params` is a list of parameters we know need are required but haven't been
+    # specified. In theory, this is unnecessary because `__init__` will raise an error if
+    # a required param is missing, but this improves diagnostics.
     missing_params: list[str]
 
 
@@ -307,6 +325,11 @@ class _Default:
             return "<default>"
         return ret
 
+    def instantiate(self) -> Any:
+        if not isinstance(self.factory, _MISSING_TYPE):
+            return self.factory()
+        return self.value
+
     @classmethod
     def from_field(cls, field: Field) -> _Default | None:
         if field._default is MISSING and field._default_factory is MISSING:
@@ -328,6 +351,7 @@ class _Param:
     default: _Default | None
     doc: str
     blueprint_cast: Callable[[str], object] | None
+    metadata: dict[str, Any]
 
     def cast(self, value: str) -> object:
         # If we have a field-level cast, always use that!
@@ -338,7 +362,7 @@ class _Param:
         # of types that result from casting to better match their expectations from polymorphic
         # construction (e.g. using default_cls from chz.factories.subclass)
         if self.meta_factory is not None:
-            return self.meta_factory.perform_cast(value, self.type)
+            return self.meta_factory.perform_cast(value)
 
         # TODO: maybe MetaFactory should have default impl and this should be:
         # return chz.factories.MetaFactory().perform_cast(value, self.type)
@@ -359,6 +383,7 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
                     default=_Default.from_field(field),
                     doc=field._doc,
                     blueprint_cast=field._blueprint_cast,
+                    metadata=field.metadata,
                 )
             )
         return params
@@ -400,7 +425,8 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
             if sigparam.kind == sigparam.VAR_KEYWORD:
                 if not is_kwargs_unpack(param_annot):
                     return ConstructionError(
-                        f"Cannot collect parameters from {obj.__name__} due to **kwargs parameter {name}"
+                        f"Cannot collect parameters from {obj.__name__} due to "
+                        f"**kwargs parameter {name}. Only Unpack[TypedDict] is supported."
                     )
                 if len(param_annot.__args__) != 1 or not is_typed_dict(param_annot.__args__[0]):
                     return ConstructionError(
@@ -416,6 +442,7 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
                             default=None,
                             doc="",
                             blueprint_cast=None,
+                            metadata={},
                         )
                     )
                 continue
@@ -430,6 +457,7 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
                     default=_Default.from_inspect_param(sigparam),
                     doc="",
                     blueprint_cast=None,
+                    metadata={},
                 )
             )
         # Note params may be empty here if obj doesn't take any parameters.
@@ -445,7 +473,8 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
 def _collect_variadic_params(
     obj: object, obj_path: str, arg_map: ArgumentMap
 ) -> tuple[list[_Param], Callable[..., Any], list[Any]] | None:
-    obj_origin: Callable[..., Any] = getattr(obj, "__origin__", obj)  # type: ignore[arg-type]
+
+    obj_origin: Any = getattr(obj, "__origin__", obj)
     if obj_origin not in (
         list,
         tuple,
@@ -513,6 +542,7 @@ def _collect_variadic_params(
                     default=None,
                     doc="",
                     blueprint_cast=None,
+                    metadata={},
                 )
             )
 
@@ -547,6 +577,7 @@ def _collect_variadic_params(
                     default=None,
                     doc="",
                     blueprint_cast=None,
+                    metadata={},
                 )
             )
 
@@ -556,7 +587,7 @@ def _collect_variadic_params(
         params = []
         variadic_types = []
         for key, annotation in typing.get_type_hints(obj_origin).items():
-            required = key in obj_origin.__required_keys__  # type: ignore[attr-defined]
+            required = key in obj_origin.__required_keys__
 
             params.append(
                 _Param(
@@ -571,6 +602,7 @@ def _collect_variadic_params(
                     ),
                     doc="",
                     blueprint_cast=None,
+                    metadata={},
                 )
             )
             variadic_types.append(annotation)
@@ -602,30 +634,21 @@ def _construct_blueprint(
     *,
     # Output parameters, do not use within this function
     # Typing these as write-only should help prevent accidental unsound use within this function
+    # See _MakeResult for docs about these parameters
     all_params: _WriteOnlyMapping[str, _Param],
     used_args: set[tuple[str, int]],
     meta_factory_value: _WriteOnlyMapping[str, Any],
     missing_params: list[str],
 ) -> dict[str, Evaluatable] | ConstructionError:
-    # - `all_params` is a dictionary containing all parameters we discover, mapping from that param
-    #   path to the parameter. Note what parameters we discover will depend on polymorphic
-    #   construction via meta_factories. We use all_params to provide a useful --help (and various
-    #   other things, e.g. detect clobbering when checking for extraneous arguments)
-    # - `used_args` is a set of (key, layer_index) tuples that we use to track which arguments from
-    #   arg_map we've used. We use this to check for extraneous arguments.
-    # - `meta_factory_value` records what meta_factory we're using. This makes --help more
-    #   understandable in the presence of polymorphism, especially when factories come from
-    #   blueprint_unspecified.
-    # - `missing_params` is a list of parameters we know need are required but haven't been
-    #   specified. In theory, this is unnecessary because `__init__` will raise an error if
-    #   a required param is missing, but this improves diagnostics.
 
+    obj_constructor = obj
     result = _collect_variadic_params(obj, obj_path, arg_map)
     params: list[_Param] | ConstructionError
     if result is not None:
-        params, obj, _ = result
+        params, obj_constructor, _ = result
     else:
         params = _collect_params(obj)
+    del obj
 
     if isinstance(params, ConstructionError):
         return params
@@ -660,7 +683,7 @@ def _construct_blueprint(
         value_mapping.update(sub_value_mapping)
         kwargs[param.name] = ParamRef(param_path)
 
-    value_mapping[obj_path] = Thunk(obj, kwargs)
+    value_mapping[obj_path] = Thunk(obj_constructor, kwargs)
     return value_mapping
 
 
@@ -670,7 +693,7 @@ def _construct_arg_for_param(
     arg_map: ArgumentMap,
     *,
     # Output parameters, do not use within this function
-    # See _construct_blueprint for details
+    # See _MakeResult for docs about these parameters
     all_params: _WriteOnlyMapping[str, _Param],
     used_args: set[tuple[str, int]],
     meta_factory_value: _WriteOnlyMapping[str, Any],
@@ -791,6 +814,12 @@ def _construct_arg_for_param(
 
     # ..or if it's a Reference to some other parameter
     if isinstance(spec, Reference):
+        if spec.ref == param_path and param.default is not None:
+            # See test_blueprint_reference_wildcard_default
+            # TODO: this is the only place we instantiate a default
+            default = param.default.instantiate()
+            return (param_path, {param_path: Value(default)})
+
         return (param_path, {param_path: ParamRef(spec.ref)})
 
     # Otherwise, see if it's something that can construct the expected type. For instance,
@@ -822,7 +851,7 @@ def _construct_arg_for_param(
         if param.meta_factory is not None:
             try:
                 factory = param.meta_factory.from_string(spec.value)
-            except MetaFromString as e:
+            except chz.factories.MetaFromString as e:
                 cast_error = None
                 try:
                     param.cast(spec.value)
@@ -885,6 +914,15 @@ def _check_for_wildcard_matching_variadic_top_level(
     variadic_params, _, variadic_types = result
     if variadic_params:
         return
+    if isinstance(param.default.value, (tuple, list)):
+        variadic_types = list(
+            set(variadic_types) | {type(element) for element in param.default.value}
+        )
+    if isinstance(param.default.value, dict):
+        variadic_types = list(
+            set(variadic_types) | {type(element) for element in param.default.value.values()}
+        )
+
     if not variadic_types:
         return
 
@@ -898,25 +936,28 @@ def _check_for_wildcard_matching_variadic_top_level(
     # are opaque and have no interaction with wildcards beyond their presence or absence).
     # See test_variadic_default_wildcard_error
     for element_type in variadic_types:
-        params = _collect_params(element_type)
-        if isinstance(params, ConstructionError):
+        subparams = _collect_params(element_type)
+        if isinstance(subparams, ConstructionError):
             continue
-        for param in params:
-            param_path = obj_path + ".__chz_empty_variadic." + param.name
+        for subparam in subparams:
+            param_path = obj_path + ".__chz_empty_variadic." + subparam.name
             found_arg = arg_map.get_kv(param_path)
-            param_path = obj_path + ".(variadic)." + param.name
+            param_path = obj_path + ".(variadic)." + subparam.name
             if found_arg is not None:
                 raise ConstructionError(
                     f"\n\nYou've hit an interesting case.\n\n"
-                    f'It is possible to construct "{param_path}" using variadics, '
-                    "but no variadic (or polymorphic) parametrisation was found.\n"
-                    f'This is fine in theory, because "{param_path}" has a default value.\n\n'
-                    f"However, you also specified the wildcard {found_arg.key!r} and you may "
-                    "have expected it to modify the default value. This is not possible -- "
-                    "default values / default_factory results are opaque to chz. "
+                    f'The parameter "{obj_path}" is variadic ({type_repr(obj)}), but no '
+                    "parametrisation was found (either variadic subparameters or a polymorphic "
+                    "parametrisation).\n"
+                    f'This is fine in theory, because "{obj_path}" has a '
+                    f"default value.\n\n"
+                    f'However, you also specified the wildcard "{found_arg.key}" and you may '
+                    f'have expected it to modify the value of "{param_path}".\n'
+                    "This is not possible -- default values / default_factory results are "
+                    "opaque to chz. "
                     "The only way in which default / default_factory interact with Blueprint "
                     "is presence / absence. So out of caution, here's an error!\n\n"
                     "If this error is a false positive, consider scoping the wildcard more "
-                    "narrowly or using exact keys. As always, append --help to a chz command "
+                    "narrowly or using exact keys. As always, appending --help to a chz command "
                     "will show you what gets mapped to which param."
                 )

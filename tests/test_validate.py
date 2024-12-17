@@ -369,6 +369,37 @@ Field 'const' has inconsistent values in object tree:
             ),
         )
 
+    @chz.chz
+    class F:
+        const: int
+
+    @chz.chz
+    class E:
+        seq: list[F]
+
+    @chz.chz
+    class D:
+        const: int
+        e: E
+
+        @chz.validate
+        def field_consistency(self):
+            chz.validators.check_field_consistency_in_tree(self, {"const"}, regex_root=r"e\.seq")
+
+    # This should not raise an error because the check is only done on the `e.seq` field
+    assert D(const=1, e=E(seq=[F(const=3), F(const=3)])).e.seq[0].const == 3
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            """\
+Field 'const' has inconsistent values in object tree:
+3 at e.seq.0.const
+4 at e.seq.1.const"""
+        ),
+    ):
+        D(const=1, e=E(seq=[F(const=3), F(const=4)]))
+
 
 def test_is_override_catches_non_overriding() -> None:
     @chz.chz

@@ -27,6 +27,7 @@ def argv_to_blueprint_args(
         if allow_hyphens:
             key = key.lstrip("-")
 
+        # parse key@=reference syntax (note =@ would be ambiguous)
         if key.endswith("@"):
             ret[key.removesuffix("@")] = chz.blueprint.Reference(value)
         else:

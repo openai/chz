@@ -353,6 +353,19 @@ def test_meta_factory_function_lambda():
     assert type(ret.cal) is calendar.Calendar
     assert ret.cal.firstweekday == 3
 
+    @chz.chz
+    class Main:
+        a: A = chz.field(default=object())
+        cal: calendar.Calendar = chz.field(
+            meta_factory=chz.factories.standard(default_module="calendar"), default=object()
+        )
+
+    argv = ["a=lambda: A()", "cal=lambda d: Calendar(int(d))", "cal.d=3"]
+    ret = chz.entrypoint(Main, argv=argv)
+    assert type(ret.a) is A
+    assert type(ret.cal) is calendar.Calendar
+    assert ret.cal.firstweekday == 3
+
 
 def test_meta_factory_type_subclass():
     @chz.chz
@@ -392,3 +405,14 @@ def test_meta_factory_function_union():
         B(field="s0default"),
         B(field="a"),
     )
+
+
+def test_meta_factory_none():
+    @chz.chz
+    class Main:
+        a: A = chz.field(meta_factory=None)
+
+    with pytest.raises(
+        InvalidBlueprintArg, match="Could not cast 'A' to test_blueprint_meta_factory:A"
+    ):
+        chz.entrypoint(Main, argv=["a=A"])

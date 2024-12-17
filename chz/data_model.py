@@ -39,6 +39,15 @@ FrozenInstanceError = dataclasses.FrozenInstanceError
 _T = TypeVar("_T")
 
 
+_INIT_ALTERNATIVES: str = (
+    "For validation, see @chz.validate decorators. "
+    "For per-field defaults, see `default` and `default_factory` options in chz.field. "
+    "To perform post-initialization rewrites of field values, use `munger` option in chz.field "
+    "or add an `init_property` to the class.\n"
+    "See the docs for more details."
+)
+
+
 def _create_fn(
     name: str, args: list[str], body: list[str], *, locals: dict[str, Any], globals: dict[str, Any]
 ):
@@ -220,13 +229,25 @@ def pretty_format(obj: Any, colored: bool = True) -> str:
     space = " " * 4
 
     if isinstance(obj, (list, tuple)):
-        if not obj or not all(is_chz(x) for x in obj):
+        if not obj or all(not is_chz(x) for x in obj):
             return repr(obj)
 
         a, b = ("[", "]") if isinstance(obj, list) else ("(", ")")
         items = [pretty_format(x, colored).replace("\n", "\n" + space) for x in obj]
         items_str = f",\n{space}".join(items)
         return f"{a}\n{space}{items_str},\n{b}"
+
+    if isinstance(obj, dict):
+        if not obj or all(not is_chz(x) for x in obj.values()):
+            return repr(obj)
+
+        items = []
+        for k, v in obj.items():
+            k_str = pretty_format(k, colored).replace("\n", "\n" + space)
+            v_str = pretty_format(v, colored).replace("\n", "\n" + space)
+            items.append(f"{k_str}: {v_str}")
+        items_str = f",\n{space}".join(items)
+        return f"{{\n{space}{items_str},\n}}"
 
     if not is_chz(obj):
         return repr(obj)
@@ -265,7 +286,7 @@ def pretty_format(obj: Any, colored: bool = True) -> str:
 
     out += "".join(field_reprs[False])
     if field_reprs[True]:
-        out += f"{space}{bold}# Fields matching default:{reset}\n"
+        out += f"{space}{bold}# Fields where pre-init value matches default:{reset}\n"
         out += "".join(field_reprs[True])
     out += f"{bold}){reset}"
     return out
@@ -435,9 +456,9 @@ def chz_make_class(cls, version: str | None, typecheck: bool | None) -> type:
     cls.__chz_fields__ = fields
 
     if "__init__" in cls.__dict__:
-        raise ValueError("Cannot define __init__ on a chz class")
+        raise ValueError("Cannot define __init__ on a chz class. " + _INIT_ALTERNATIVES)
     if "__post_init__" in cls.__dict__:
-        raise ValueError("Cannot define __post_init__ on a chz class")
+        raise ValueError("Cannot define __post_init__ on a chz class. " + _INIT_ALTERNATIVES)
     cls.__init__ = _synthesise_init(fields.values(), sys.modules[user_module].__dict__)
     cls.__init__.__qualname__ = f"{cls.__qualname__}.__init__"
 

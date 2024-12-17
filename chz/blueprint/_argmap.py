@@ -58,8 +58,7 @@ class _FoundArgument:
     layer_name: str | None
 
 
-def _valid_parent(key: str, param_paths: AbstractSet[str]) -> str | None:
-    parts = key.split(".")
+def _valid_parent(parts: list[str], param_paths: AbstractSet[str]) -> str | None:
     for i in reversed(range(1, len(parts))):
         parent = ".".join(parts[:i])
         if parent in param_paths:
@@ -164,8 +163,11 @@ class ArgumentMap:
                 ):
                     # Okay, we have an extraneous argument. We're going to error, but we should
                     # helpfully try to figure out what the user wanted
-                    ratios = {p: wildcard_key_approx(key, p) for p in param_paths}
                     extra = ""
+                    if layer.layer_name:
+                        extra += f" (from {layer.layer_name})"
+
+                    ratios = {p: wildcard_key_approx(key, p) for p in param_paths}
                     if ratios:
                         max_option = max(ratios, key=lambda v: ratios[v][0])
                         if ratios[max_option][0] > 0.1:
@@ -182,17 +184,19 @@ class ArgumentMap:
                     if key.startswith("--"):
                         extra += "\nDid you mean to use allow_hyphens=True in your entrypoint?"
 
-                    valid_parent_help = ""
                     if not is_wildcard:
-                        valid_parent = _valid_parent(key, param_paths)
-                        if valid_parent:
-                            valid_parent_help = f" (parent key {valid_parent!r} is valid)"
+                        parts = key.split(".")
+                        if len(parts) >= 2:
+                            valid_parent = _valid_parent(parts, param_paths)
+                            if valid_parent is None:
+                                extra += f"\nNo param found matching {parts[0]!r}"
+                            elif valid_parent != ".".join(parts[:-1]):
+                                extra += f"\nParam {valid_parent!r} is closest valid ancestor"
 
                     raise ExtraneousBlueprintArg(
                         f"Extraneous argument {key!r} to Blueprint for {type_repr(target)}"
                         + extra
                         + "\nAppend --help to your command to see valid arguments"
-                        + valid_parent_help
                     )
 
     def __repr__(self) -> str:

@@ -94,7 +94,8 @@ def test_blueprint_extraneous_valid_parent():
 
     with pytest.raises(
         ExtraneousBlueprintArg,
-        match=r"""Extraneous argument 'b.c.nope' to Blueprint for test_blueprint_errors:test_blueprint_extraneous_valid_parent.<locals>.A
-Append --help to your command to see valid arguments \(parent key 'b.c' is valid\)""",
+        match=r"""Extraneous argument 'b.cc.nope' to Blueprint for test_blueprint_errors:test_blueprint_extraneous_valid_parent.<locals>.A \(from command line\)
+Param 'b' is closest valid ancestor
+Append --help to your command to see valid arguments""",
     ):
-        chz.entrypoint(A, argv=["b.c.nope=0"])
+        chz.entrypoint(A, argv=["b.cc.nope=0"])

@@ -1036,7 +1036,7 @@ def test_pretty_format():
     expected = f"""{Parent.__qualname__}(
     age=30,
     name='alice',
-    # Fields matching default:
+    # Fields where pre-init value matches default:
     child={Child.__qualname__}(
         age=1,
         name='bob',
@@ -1044,6 +1044,33 @@ def test_pretty_format():
     nickname=None  # 'alice' (after init),
 )"""
     assert pretty_format(obj, colored=False) == expected
+
+    @chz.chz
+    class Collection:
+        children: list[Child]
+        named_children: dict[str, Child]
+
+    obj = Collection(
+        children=[Child(name="alice", age=1)],
+        named_children={"bob": Child(name="bob", age=2)},
+    )
+    assert (
+        pretty_format(obj, colored=False)
+        == """test_pretty_format.<locals>.Collection(
+    children=[
+        test_pretty_format.<locals>.Child(
+            age=1,
+            name='alice',
+        ),
+    ],
+    named_children={
+        'bob': test_pretty_format.<locals>.Child(
+            age=2,
+            name='bob',
+        ),
+    },
+)"""
+    )
 
 
 def test_metadata():

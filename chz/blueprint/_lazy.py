@@ -87,21 +87,34 @@ def evaluate(value_mapping: dict[str, Evaluatable]) -> Any:
 def check_reference_targets(
     value_mapping: dict[str, Evaluatable], param_paths: AbstractSet[str]
 ) -> None:
+
+    invalid_references: dict[str, list[str]] = {}
+
     for param_path, value in value_mapping.items():
         if isinstance(value, ParamRef):
             if value.ref not in param_paths:
-                ratios = {p: wildcard_key_approx(value.ref, p) for p in param_paths}
-                extra = ""
-                if ratios:
-                    max_option = max(ratios, key=lambda v: ratios[v][0])
-                    if ratios[max_option][0] > 0.1:
-                        extra = f"\nDid you mean {ratios[max_option][1]!r}?"
+                invalid_references.setdefault(value.ref, []).append(param_path)
 
-                nested_pattern = wildcard_key_to_regex("..." + value.ref)
-                found_key = next((p for p in param_paths if nested_pattern.fullmatch(p)), None)
-                if found_key is not None:
-                    extra += f"\nDid you get the nesting wrong, maybe you meant {found_key!r}?"
+    if invalid_references:
+        errors = []
+        for reference, referrers in invalid_references.items():
+            ratios = {p: wildcard_key_approx(reference, p) for p in param_paths}
+            extra = ""
+            if ratios:
+                max_option = max(ratios, key=lambda v: ratios[v][0])
+                if ratios[max_option][0] > 0.1:
+                    extra = f"\nDid you mean {ratios[max_option][1]!r}?"
 
-                raise InvalidBlueprintArg(
-                    f"Invalid reference target {value.ref!r} for {param_path}" + extra
-                )
+            nested_pattern = wildcard_key_to_regex("..." + reference)
+            found_key = next((p for p in param_paths if nested_pattern.fullmatch(p)), None)
+            if found_key is not None:
+                extra += f"\nDid you get the nesting wrong, maybe you meant {found_key!r}?"
+
+            if len(referrers) > 1:
+                referrers_str = "params " + ", ".join(referrers)
+            else:
+                referrers_str = f"param {referrers[0]}"
+
+            errors.append(f"Invalid reference target {reference!r} for {referrers_str}" + extra)
+
+        raise InvalidBlueprintArg("\n\n".join(errors))

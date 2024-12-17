@@ -21,8 +21,8 @@ def test_entrypoint():
     with pytest.raises(
         ExtraneousBlueprintArg,
         match=(
-            "Extraneous argument '--a' to Blueprint for test_blueprint.test_entrypoint.<locals>.foo\n"
-            "Did you mean to use allow_hyphens=True in your entrypoint?"
+            r"Extraneous argument '--a' to Blueprint for test_blueprint.test_entrypoint.<locals>.foo \(from command line\)"
+            "\nDid you mean to use allow_hyphens=True in your entrypoint?"
         ),
     ):
         chz.entrypoint(foo, argv=argv)
@@ -285,7 +285,7 @@ class Model:
 @chz.chz
 class Experiment:
     model: Model
-    dataset: list[str] = chz.field(meta_factory=chz.factories.function(), doc="Yummy data!")
+    dataset: list[str] = chz.field(doc="Yummy data!")
 
 
 def test_nested_construction():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import collections.abc
+import re
 from typing import Any, Callable, Literal
 
 import chz
@@ -119,12 +120,12 @@ def const_default(self: Any, attr: str) -> None:
 _decorator_typecheck = for_all_fields(typecheck)
 
 
-def check_field_consistency_in_tree(obj: Any, fields: set[str]) -> None:
+def check_field_consistency_in_tree(obj: Any, fields: set[str], regex_root: str = "") -> None:
     """
     This isn't itself a validator. See test_validate_field_consistency for example usage.
     This is effectively a way to paper over a potential missing feature in chz.
     """
-    values: dict[str, dict[object, list[str]]] = collections.defaultdict(
+    values: dict[tuple[str, str], dict[object, list[str]]] = collections.defaultdict(
         lambda: collections.defaultdict(list)
     )
 
@@ -134,8 +135,9 @@ def check_field_consistency_in_tree(obj: Any, fields: set[str]) -> None:
         for f in obj.__chz_fields__.values():
             value = getattr(obj, f.logical_name)
             field_path = f"{obj_path}.{f.logical_name}" if obj_path else f.logical_name
-            if f.logical_name in fields:
-                values[f.logical_name][value].append(field_path)
+            regex_match = re.search(regex_root, obj_path)
+            if f.logical_name in fields and regex_match:
+                values[(regex_match.group(), f.logical_name)][value].append(field_path)
 
             if chz.is_chz(value):
                 inner(value, field_path)
@@ -155,7 +157,7 @@ def check_field_consistency_in_tree(obj: Any, fields: set[str]) -> None:
             return ", ".join(paths)
         return ", ".join(paths[:3]) + f", ... ({len(paths) - 3} more)"
 
-    for field, value_to_paths in values.items():
+    for (_, field), value_to_paths in values.items():
         if len(value_to_paths) > 1:
             raise ValueError(
                 f"Field {field!r} has inconsistent values in object tree:\n"

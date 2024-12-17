@@ -212,9 +212,10 @@ class Field:
 
     @property
     def meta_factory(self) -> chz.factories.MetaFactory | None:
-        if isinstance(self._meta_factory, _MISSING_TYPE):
-            potential_type = self.x_type
+        if self._meta_factory is None:
+            return None
 
+        if isinstance(self._meta_factory, _MISSING_TYPE):
             if isinstance(self._blueprint_unspecified, _MISSING_TYPE):
                 unspec = None
             else:
@@ -222,9 +223,15 @@ class Field:
 
             import chz.factories
 
-            return chz.factories.standard(
-                potential_type, unspecified=unspec, default_module=self._user_module
+            ret = chz.factories.standard(
+                self.x_type, unspecified=unspec, default_module=self._user_module
             )
+            ret.field_annotation = self.x_type
+            ret.field_module = self._user_module
+            return ret
+
+        self._meta_factory.field_annotation = self.x_type
+        self._meta_factory.field_module = self._user_module
         return self._meta_factory
 
     def get_munger(self) -> Callable[[Any], None] | None:

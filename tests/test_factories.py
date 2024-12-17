@@ -136,7 +136,8 @@ def test_standard_subclass_object_any():
         assert f.from_string("collections.abc.MutableSequence") is collections.abc.MutableSequence
 
         f = standard(annotation=any_object, unspecified=type[object])
-        assert f.unspecified_factory() == type[object]
+        assert f.unspecified_factory() != type[object]
+        assert f.unspecified_factory()() is object
 
         f = standard(annotation=any_object, unspecified=type)
         assert f.unspecified_factory() is type
@@ -238,8 +239,8 @@ def test_standard_union_optional():
 
     f = standard(annotation=int | None)
 
-    assert f.perform_cast("123", ...) == 123
-    assert f.perform_cast("None", ...) is None
+    assert f.perform_cast("123") == 123
+    assert f.perform_cast("None") is None
 
 
 def test_standard_union_module():
@@ -258,9 +259,27 @@ def test_standard_union_module():
     assert f.from_string(f"{__name__}:foo") is foo
 
 
-def test_standard_union_type_unspecified():
+def test_standard_union_type():
+    f = standard(annotation=type[A] | type[X])
+    assert f.unspecified_factory() == None
+
+    f = standard(annotation=type[A | X])
+    assert f.unspecified_factory() == None
+
     f = standard(annotation=type[A] | type[X], unspecified=type[B])
-    assert f.unspecified_factory() == type[B]
+    assert f.unspecified_factory() != type[B]
+    assert f.unspecified_factory()() is B
+
+    f = standard(annotation=type[A | X], unspecified=type[B])
+    assert f.unspecified_factory() != type[B]
+    assert f.unspecified_factory()() is B
+
+
+def test_standard_type_generic():
+    f = standard(annotation=type[list[int]])
+    assert f.unspecified_factory() is not list
+    assert f.unspecified_factory() != list[int]
+    assert f.unspecified_factory()() == list[int]
 
 
 def test_standard_lambda():

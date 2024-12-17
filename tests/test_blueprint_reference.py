@@ -27,8 +27,26 @@ Arguments:
 """
     )
 
-    with pytest.raises(InvalidBlueprintArg, match=r"Invalid reference target 'c' for b"):
+    with pytest.raises(InvalidBlueprintArg, match=r"Invalid reference target 'c' for param b"):
         chz.Blueprint(Main).apply({"a": "foo", "b": Reference("c")}).make()
+
+
+def test_blueprint_reference_multiple_invalid():
+    @chz.chz
+    class Main:
+        a: int
+        b: int
+        c: int
+
+    with pytest.raises(
+        InvalidBlueprintArg,
+        match="""\
+Invalid reference target 'x' for params a, b
+
+Invalid reference target 'bb' for param c
+Did you mean 'b'?""",
+    ):
+        chz.Blueprint(Main).apply_from_argv(["a@=x", "b@=x", "c@=bb"]).make()
 
 
 def test_blueprint_reference_nested():
@@ -70,6 +88,20 @@ def test_blueprint_reference_wildcard():
 
     obj = chz.Blueprint(Main).apply_from_argv(["...name@=a.b.name", "a.b.name=foo"]).make()
     assert obj == Main(name="foo", a=A(name="foo", b=B(name="foo")))
+
+
+def test_blueprint_reference_wildcard_default():
+    @chz.chz
+    class A:
+        name: str
+
+    @chz.chz
+    class Main:
+        name: str = "foo"
+        a: A
+
+    obj = chz.Blueprint(Main).apply_from_argv(["...name@=name"]).make()
+    assert obj == Main(name="foo", a=A(name="foo"))
 
 
 def test_blueprint_reference_cycle():

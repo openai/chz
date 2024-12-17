@@ -3,10 +3,9 @@ import collections
 import functools
 import importlib
 import re
-import sys
 import types
 import typing
-from typing import Any, Callable, Union, get_args, get_origin
+from typing import Any, Callable
 
 import typing_extensions
 
@@ -47,6 +46,11 @@ class MetaFactory:
     Consider looking at the docstring for `subclass` for a concrete example.
     """
 
+    def __init__(self) -> None:
+        # Set by chz.Field
+        self.field_annotation: TypeForm | _MISSING_TYPE = MISSING
+        self.field_module: types.ModuleType | str | _MISSING_TYPE = MISSING
+
     def unspecified_factory(self) -> Callable[..., Any] | None:
         """The default callable to use to get a value of the expected type.
 
@@ -59,11 +63,9 @@ class MetaFactory:
         """The callable that best corresponds to `factory`."""
         raise NotImplementedError
 
-    def perform_cast(self, value: str, default_target: TypeForm):
-        """
-        TODO: maybe make this default to:
-        return _simplistic_try_cast(value, default_target)
-        """
+    def perform_cast(self, value: str):
+        # TODO: maybe make this default to:
+        # return _simplistic_try_cast(value, default_target)
         raise NotImplementedError
 
 
@@ -103,10 +105,32 @@ class subclass(MetaFactory):
     """
 
     def __init__(
-        self, base_cls: InstantiableType, default_cls: InstantiableType | None = None
+        self,
+        base_cls: InstantiableType | _MISSING_TYPE = MISSING,
+        default_cls: InstantiableType | _MISSING_TYPE = MISSING,
     ) -> None:
-        self.base_cls = base_cls
-        self.default_cls = default_cls if default_cls is not None else base_cls
+
+        super().__init__()
+        self._base_cls = base_cls
+        self._default_cls = default_cls
+
+    @property
+    def base_cls(self) -> InstantiableType:
+        if isinstance(self._base_cls, _MISSING_TYPE):
+            assert not isinstance(self.field_annotation, _MISSING_TYPE)
+            if not isinstance(self.field_annotation, InstantiableType):
+                raise RuntimeError(
+                    f"Must explicitly specify base_cls since {self.field_annotation!r} "
+                    "is not an instantiable type"
+                )
+            return self.field_annotation
+        return self._base_cls
+
+    @property
+    def default_cls(self) -> InstantiableType:
+        if isinstance(self._default_cls, _MISSING_TYPE):
+            return self.base_cls
+        return self._default_cls
 
     def unspecified_factory(self) -> Callable[..., Any]:
         return self.default_cls  # type: ignore[return-value]
@@ -118,17 +142,12 @@ class subclass(MetaFactory):
         """
         return _find_subclass(factory, self.base_cls)
 
-    def perform_cast(self, value: str, default_target: TypeForm):
-        if self.default_cls is not None:
-            try:
-                return _simplistic_try_cast(value, self.default_cls)
-            except CastError:
-                pass
+    def perform_cast(self, value: str):
+        try:
+            return _simplistic_try_cast(value, self.default_cls)
+        except CastError:
+            pass
         return _simplistic_try_cast(value, self.base_cls)
-
-
-class _sentinel:
-    pass
 
 
 class function(MetaFactory):
@@ -136,7 +155,7 @@ class function(MetaFactory):
         self,
         unspecified: Callable[..., Any] | None = None,
         *,
-        default_module: str | types.ModuleType | None | _sentinel = _sentinel(),  # noqa: B008
+        default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
     ) -> None:
         """
         Read the docstring for `MetaFactory` and `subclass` first.
@@ -168,12 +187,17 @@ class function(MetaFactory):
         `Dataset`, instead of erroring because it doesn't know what factory to use to produce a
         Dataset.
         """
+
+        super().__init__()
         self.unspecified = unspecified
-        if isinstance(default_module, _sentinel):
-            # TODO: replace with _getframemodulename in Python 3.12
-            default_module = sys._getframe(1).f_globals["__name__"]
-        assert not isinstance(default_module, _sentinel)
-        self.default_module = default_module
+        self._default_module = default_module
+
+    @property
+    def default_module(self) -> types.ModuleType | str | None:
+        if isinstance(self._default_module, _MISSING_TYPE):
+            assert not isinstance(self.field_module, _MISSING_TYPE)
+            return self.field_module
+        return self._default_module
 
     def unspecified_factory(self) -> Callable[..., Any] | None:
         return self.unspecified
@@ -219,73 +243,9 @@ class function(MetaFactory):
 
         return _module_getattr(module, var)
 
-    def perform_cast(self, value: str, default_target: TypeForm):
-        return _simplistic_try_cast(value, default_target)
-
-
-class union(MetaFactory):
-    def __init__(
-        self, type_args: tuple[InstantiableType, ...], default_cls: InstantiableType | None = None
-    ) -> None:
-        self.type_args = type_args
-
-        self.default_cls = default_cls
-        if default_cls is None:
-            if self.type_args and len(self.type_args) == 2 and type(None) in self.type_args:
-                unwrapped_optional = [t for t in self.type_args if t is not type(None)][0]
-                if callable(unwrapped_optional):
-                    self.default_cls = unwrapped_optional
-
-    def unspecified_factory(self) -> Callable[..., Any] | None:
-        return self.default_cls  # type: ignore[return-value]
-
-    def from_string(self, factory: str) -> Callable[..., Any]:
-        if is_instantiable_type(self.default_cls):
-            return subclass(self.default_cls).from_string(factory)
-
-        for t in self.type_args:
-            if factory == t.__name__ and is_instantiable_type(t):
-                return subclass(t).from_string(factory)
-        raise MetaFromString(f"Could not produce a union instance from {factory!r}")
-
-    def perform_cast(self, value: str, default_target: TypeForm):
-        # It's important that we do not try to cast to just self.unwrapped_optional, since this
-        # means we will cast "None" incorrectly
-        return _simplistic_try_cast(value, Union[*self.type_args])
-
-
-class type_subclass(MetaFactory):
-    def __init__(self, base_type: type, default_type: InstantiableType | None = None) -> None:
-        assert get_origin(base_type) is type
-        base_type = get_args(base_type)[0]
-        assert isinstance(base_type, type)
-        if default_type is not None:
-            default_type = get_args(default_type)[0]
-        else:
-            default_type = base_type
-        assert isinstance(default_type, type)
-
-        self.base_type = base_type
-        self.default_type = default_type
-
-    def unspecified_factory(self) -> Callable[..., Any]:
-        return lambda: self.default_type
-
-    def from_string(self, factory: str) -> Callable[..., Any]:
-        """
-        If factory=module:cls, import module and return cls.
-        If factory=cls, do our best to find a subclass of base_cls named cls.
-        """
-        typ = subclass(self.base_type, self.default_type).from_string(factory)
-        return lambda: typ
-
-    def perform_cast(self, value: str, default_target: TypeForm):
-        if self.default_type is not None:
-            try:
-                return _simplistic_try_cast(value, type[self.default_type])
-            except CastError:
-                pass
-        return _simplistic_try_cast(value, type[self.base_type])
+    def perform_cast(self, value: str):
+        assert not isinstance(self.field_annotation, _MISSING_TYPE)
+        return _simplistic_try_cast(value, self.field_annotation)
 
 
 def _module_from_name(name: str) -> types.ModuleType:
@@ -410,7 +370,10 @@ def get_unspecified_from_annotation(annotation: TypeForm) -> Callable[..., Any] 
 
     if typing.get_origin(annotation) is type:
         base_type = typing.get_args(annotation)[0]
-        assert isinstance(base_type, type)
+        if not isinstance(getattr(base_type, "__origin__", base_type), type):
+            # No unspecified for type[SpecialForm] e.g. type[int | str]
+            # TODO: annotated
+            return None
         return type[base_type]  # type: ignore[return-value]
 
     if is_union_type(annotation):
@@ -434,14 +397,33 @@ def get_unspecified_from_annotation(annotation: TypeForm) -> Callable[..., Any] 
 class standard(MetaFactory):
     def __init__(
         self,
-        annotation: TypeForm,
+        annotation: TypeForm | _MISSING_TYPE = MISSING,
         unspecified: Callable[..., Any] | None = None,
         default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
     ) -> None:
 
-        self.annotation = annotation
+        super().__init__()
+        self._annotation = annotation
         self.original_unspecified = unspecified
         self._default_module = default_module
+
+    @property
+    def annotation(self) -> TypeForm:
+        if isinstance(self._annotation, _MISSING_TYPE):
+            assert not isinstance(self.field_annotation, _MISSING_TYPE)
+            return self.field_annotation
+        return self._annotation
+
+    @property
+    def default_module(self) -> types.ModuleType | str | None:
+        if isinstance(self._default_module, _MISSING_TYPE):
+            if isinstance(self.field_module, _MISSING_TYPE):
+                # TODO: maybe make this assert and make artificial use cases pass a value explicitly
+                return None
+            return self.field_module
+        if isinstance(self._default_module, str):
+            return _module_from_name(self._default_module)
+        return self._default_module
 
     @functools.cached_property
     def computed_unspecified(self) -> Callable[..., Any] | None:
@@ -451,18 +433,12 @@ class standard(MetaFactory):
             else self.original_unspecified
         )
 
-    @property
-    def default_module(self) -> types.ModuleType | _MISSING_TYPE | None:
-        if isinstance(self._default_module, str):
-            return _module_from_name(self._default_module)
-        return self._default_module
-
     def unspecified_factory(self) -> Callable[..., Any] | None:
 
         if (
             self.computed_unspecified is not None
-            and typing.get_origin(self.annotation) is type
             and typing.get_origin(self.computed_unspecified) is type
+            and typing.get_args(self.computed_unspecified)
         ):
             base_type = typing.get_args(self.computed_unspecified)[0]
             # TODO: remove special handling here and elsewhere by moving logic to collect_params
@@ -545,7 +521,9 @@ class standard(MetaFactory):
 
             try:
                 default_module = self.default_module
-                if default_module is not None and not isinstance(default_module, _MISSING_TYPE):
+                if isinstance(default_module, str):
+                    default_module = _module_from_name(default_module)
+                if default_module is not None:
                     obj = _module_getattr(default_module, factory)
                     return _return_prospective(obj, self.annotation, factory=factory)
 
@@ -559,7 +537,7 @@ class standard(MetaFactory):
             f"Could not produce a {type_repr(self.annotation)} instance from {factory!r}"
         )
 
-    def perform_cast(self, value: str, default_target: TypeForm):
+    def perform_cast(self, value: str):
         if self.original_unspecified is not None:
             try:
                 return _simplistic_try_cast(value, self.original_unspecified)

@@ -352,7 +352,11 @@ def test_variadic_default_wildcard_error():
 
     with pytest.raises(
         ConstructionError,
-        match="specified the wildcard '...a' and you may have expected it to modify the default value",
+        match=(
+            r'The parameter "xs" is variadic(.|\n)*'
+            r'However, you also specified the wildcard "\.\.\.a" and you may '
+            r'have expected it to modify the value of "xs\.\(variadic\)\.a"'
+        ),
     ):
         chz.Blueprint(MainList).apply({"...a": 1}).make()
 
@@ -362,6 +366,48 @@ def test_variadic_default_wildcard_error():
         a: int  # same name as X.a, to prevent unused wildcard error
 
     assert chz.Blueprint(MainListOk).apply({"...a": 1}).make() == MainListOk(xs=[], a=1)
+
+
+def test_variadic_default_wildcard_error_using_types_from_default():
+    @chz.chz
+    class Clause:
+        def value(self) -> bool:
+            raise NotImplementedError
+
+    @chz.chz
+    class SimpleClause(Clause):
+        val: bool
+
+        def value(self) -> bool:
+            return self.val
+
+    @chz.chz
+    class FalseClause(SimpleClause):
+        val: bool = False
+
+    @chz.chz
+    class AndClause(Clause):
+        clauses: tuple[Clause, ...] = ()
+
+        def value(self) -> bool:
+            return all(clause.value() for clause in self.clauses)
+
+    @chz.chz
+    class MyClause(AndClause):
+        # Need to check both Clause and FalseClause for wildcard matches
+        clauses: tuple[Clause, ...] = (FalseClause(), FalseClause())
+
+    with pytest.raises(
+        ConstructionError,
+        match=(
+            r'The parameter "clauses.1.clauses" is variadic(.|\n)*'
+            r'However, you also specified the wildcard "\.\.\.val" and you may '
+            r'have expected it to modify the value of "clauses.1.clauses\.\(variadic\)\.val"'
+        ),
+    ):
+        chz.Blueprint(AndClause).apply_from_argv(
+            ["clauses.0=SimpleClause", "clauses.1=MyClause", "...val=True"]
+        ).make()
 
 
 def test_polymorphic_variadic_generic():
