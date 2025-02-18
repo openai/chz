@@ -600,3 +600,94 @@ def test_blueprint_apply_subpath():
 
     with pytest.raises(ExtraneousBlueprintArg, match=r"Extraneous argument 'b.field' to Blueprint"):
         chz.Blueprint(Main).apply({"field": 1}, subpath="b").make()
+
+
+def test_blueprint_enum_all_defaults():
+    import enum
+
+    class E(enum.StrEnum):
+        foo = enum.auto()
+        bar = enum.auto()
+
+    @chz.chz
+    class Inner:
+        e: E = E.foo
+
+    @chz.chz
+    class Args:
+        e: E = E.foo
+        inner: Inner
+
+    assert chz.Blueprint(Args).make() == Args(e=E.foo, inner=Inner(e=E.foo))
+    assert chz.Blueprint(Args).apply({"inner.e": Castable("bar")}).make() == Args(
+        e=E.foo, inner=Inner(e=E.bar)
+    )
+
+
+def test_blueprint_functools_partial():
+    import functools
+
+    def foo(a: int = 1, b: int = 2):
+        return a, b
+
+    partial_foo = functools.partial(foo, a=3, b=4)
+
+    assert chz.Blueprint(partial_foo).apply({"a": 5}).make() == (5, 4)
+
+    @chz.chz
+    class Foo:
+        a: int = 1
+        b: int = 2
+
+    partial_foo = functools.partial(Foo, a=3, b=4)
+
+    assert chz.Blueprint(partial_foo).apply({"a": 5}).make() == Foo(a=5, b=4)
+
+    @chz.chz
+    class A:
+        a: str = "a"
+
+    @chz.chz
+    class B(A):
+        a: str = "b"
+
+    @chz.chz
+    class Main:
+        a: A = chz.field(blueprint_unspecified=B)
+        field: int = 0
+
+    partial_main = functools.partial(Main, field=1)
+
+    assert chz.Blueprint(partial_main).make() == Main(a=B(a="b"), field=1)
+
+
+def test_blueprint_unspecified_functools_partial():
+    @chz.chz
+    class A:
+        field: int
+        typ: str = "a"
+
+    @chz.chz
+    class B(A):
+        typ: str = "b"
+
+    import functools
+
+    @chz.chz
+    class Main:
+        a: A = chz.field(blueprint_unspecified=functools.partial(B, field=1))
+
+    assert chz.Blueprint(Main).make() == Main(a=B(field=1))
+
+    @chz.chz
+    class C(A):
+        missing: int
+
+    @chz.chz
+    class Main:
+        a: A = chz.field(blueprint_unspecified=functools.partial(C, field=2))
+
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): a.missing"
+    ):
+        chz.Blueprint(Main).make()

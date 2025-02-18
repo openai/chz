@@ -432,7 +432,18 @@ def test_hash():
         def a(self):
             return [self.X_a]
 
-    hash(T(a=1))
+    with pytest.raises(TypeError):
+        hash(T(a=1))
+
+    @chz.chz
+    class U:
+        X_a: list[int]
+
+        @chz.init_property
+        def a(self):
+            return tuple(self.X_a)
+
+    hash(U(a=[1, 2, 3]))
 
 
 def test_blueprint_values():
@@ -457,12 +468,16 @@ def test_blueprint_values():
 
     assert x.a == 4  # (c=1) + 1 + (b=2)
     assert x.c.b == 2  # (c=1) + 1
-    bx = chz.Blueprint(X)
-    assert bx.apply(chz.beta_to_blueprint_values(x)).make() == x
-    z = X(b=2, c=Y(c=3))
-    assert z.a == 6  # (c=3) + 1 + (b=2)
-    assert z.c.b == 4  # (c=3) + 1
-    assert bx.apply(chz.beta_to_blueprint_values(z)).make() == z
+    values = chz.beta_to_blueprint_values(x)
+    assert values == {"b": 2, "c": Y, "c.c": 1}
+    assert chz.Blueprint(X).apply(values).make() == x
+
+    x = X(b=2, c=Y(c=3))
+    assert x.a == 6  # (c=3) + 1 + (b=2)
+    assert x.c.b == 4  # (c=3) + 1
+    values = chz.beta_to_blueprint_values(x)
+    assert values == {"b": 2, "c": Y, "c.c": 3}
+    assert chz.Blueprint(X).apply(values).make() == x
 
     @chz.chz
     class Q:
@@ -470,8 +485,9 @@ def test_blueprint_values():
         b: tuple[int, ...] = chz.field(default_factory=lambda: (1, 2, 3))
 
     q = Q(a=1)
-    bq = chz.Blueprint(Q)
-    assert bq.apply(chz.beta_to_blueprint_values(q)).make() == q
+    values = chz.beta_to_blueprint_values(q)
+    assert values == {"a": 1, "b": (1, 2, 3)}
+    assert chz.Blueprint(Q).apply(values).make() == q
 
     @chz.chz
     class R:
@@ -479,22 +495,19 @@ def test_blueprint_values():
         b: list[int] = chz.field(default_factory=lambda: [1, 2, 3])
 
     r = R(a=1)
-    br = chz.Blueprint(R)
 
-    # This will ensure we can make all arguments castable strings as well.
-    # Otherwise if we serialize and we use tuples instead of lists we run into issues because
-    # json represents tuples as lists.
+    # Ensure that castable + json mostly works
+    values = chz.beta_to_blueprint_values(r)
     assert (
-        br.apply(
-            {
-                key: chz.Castable(str(value))
-                for key, value in json.loads(json.dumps(chz.beta_to_blueprint_values(r))).items()
-            }
-        ).make()
+        chz.Blueprint(R)
+        .apply(
+            {key: chz.Castable(str(value)) for key, value in json.loads(json.dumps(values)).items()}
+        )
+        .make()
         == r
     )
 
-    # This test ensures that we handle properly:
+    # This test ensures that we handle the following as expected:
     # - default_factory
     # - munged values
     # - castable values
@@ -505,7 +518,9 @@ def test_blueprint_values():
         munged_value: str = chz.field(default="?", munger=lambda instance, value: value + "!!")
 
     t = T(munged_value="Hello")
-    assert chz.Blueprint(T).apply(chz.beta_to_blueprint_values(t)).make() == t
+    values = chz.beta_to_blueprint_values(t)
+    assert values == {"default_factory": "?", "default_value": "!", "munged_value": "Hello"}
+    assert chz.Blueprint(T).apply(values).make() == t
 
     # This test is dedicated to testing that `x_type`/`blueprint_cast` works fine
     @chz.chz
@@ -516,7 +531,9 @@ def test_blueprint_values():
 
     # The type of the blueprint should be the one we are supposed to pass in the blueprint
     # Not the one after instantiation
-    assert chz.beta_to_blueprint_values(u)["value"] == "7"
+    values = chz.beta_to_blueprint_values(u)
+    assert values == {"value": "7"}
+    assert chz.Blueprint(U).apply(values).make() == u
 
     # This test verifies that derived properties aren't serialized and X_ fields are not exposed
     @chz.chz
@@ -528,9 +545,10 @@ def test_blueprint_values():
             return self.value * 2
 
     w = W(value=5)
-    bp_args = chz.beta_to_blueprint_values(w)
-    assert "value_2" not in bp_args
-    assert "value" in bp_args
+    values = chz.beta_to_blueprint_values(w)
+    assert values == {"value": 5}
+    assert "value_2" not in values
+    assert "value" in values
     assert w.value_2 == 10
 
 
@@ -573,17 +591,23 @@ def test_blueprint_values_polymorphic():
         w: int
 
     w = W(x=Y(a=1, b=2), w=3)
-    w_new = chz.Blueprint(W).apply(chz.beta_to_blueprint_values(w)).make()
+    values = chz.beta_to_blueprint_values(w)
+    assert values == {"x": Y, "x.a": 1, "x.b": 2, "w": 3}
+    w_new = chz.Blueprint(W).apply(values).make()
     assert w_new == w
     assert w_new.x.name == "y"
 
     w = W(x=Z(a=1, c=2), w=3)
-    w_new = chz.Blueprint(W).apply(chz.beta_to_blueprint_values(w)).make()
+    values = chz.beta_to_blueprint_values(w)
+    assert values == {"x": Z, "x.a": 1, "x.c": 2, "w": 3}
+    w_new = chz.Blueprint(W).apply(values).make()
     assert w_new == w
     assert w_new.x.name == "z"
 
     w = W(x=Y2(a=1, b=2, d=3), w=4)
-    w_new = chz.Blueprint(W).apply(chz.beta_to_blueprint_values(w)).make()
+    values = chz.beta_to_blueprint_values(w)
+    assert values == {"x": Y2, "x.a": 1, "x.b": 2, "x.d": 3, "w": 4}
+    w_new = chz.Blueprint(W).apply(values).make()
     assert w_new == w
     assert w_new.x.name == "y2"
 
@@ -593,14 +617,74 @@ def test_blueprint_values_polymorphic():
         w: int
 
     wu = W_Union(x=Y(a=1, b=2), w=3)
-    wu_new = chz.Blueprint(W_Union).apply(chz.beta_to_blueprint_values(wu)).make()
+    values = chz.beta_to_blueprint_values(wu)
+    assert values == {"x": Y, "x.a": 1, "x.b": 2, "w": 3}
+    wu_new = chz.Blueprint(W_Union).apply(values).make()
     assert wu_new == wu
     assert wu_new.x.name == "y"
 
     wu = W_Union(x=Z(a=1, c=2), w=3)
-    wu_new = chz.Blueprint(W_Union).apply(chz.beta_to_blueprint_values(wu)).make()
+    values = chz.beta_to_blueprint_values(wu)
+    assert values == {"x": Z, "x.a": 1, "x.c": 2, "w": 3}
+    wu_new = chz.Blueprint(W_Union).apply(values).make()
     assert wu_new == wu
     assert wu_new.x.name == "z"
+
+
+def test_blueprint_values_variadic():
+    @chz.chz
+    class A:
+        a: int
+
+    @chz.chz
+    class B(A):
+        b: int
+
+    @chz.chz
+    class Main:
+        list_a: list[A]
+        dict_a: dict[str, A]
+
+    main = Main(list_a=[A(a=1), B(a=2, b=3)], dict_a={"a": A(a=4), "b": B(a=5, b=6)})
+    values = chz.beta_to_blueprint_values(main)
+    assert values == {
+        "list_a.0": A,
+        "list_a.0.a": 1,
+        "list_a.1": B,
+        "list_a.1.a": 2,
+        "list_a.1.b": 3,
+        "dict_a.a": A,
+        "dict_a.a.a": 4,
+        "dict_a.b": B,
+        "dict_a.b.a": 5,
+        "dict_a.b.b": 6,
+    }
+    assert chz.Blueprint(Main).apply(values).make() == main
+
+    @chz.chz
+    class Main:
+        list_a: list[A | int]
+        dict_a: dict[str, A | int]
+
+    main = Main(list_a=[A(a=1), 2], dict_a={"a": A(a=4), "b": 5})
+    values = chz.beta_to_blueprint_values(main)
+    assert values == {
+        "list_a.0": A,
+        "list_a.0.a": 1,
+        "list_a.1": 2,
+        "dict_a.a": A,
+        "dict_a.a.a": 4,
+        "dict_a.b": 5,
+    }
+    assert chz.Blueprint(Main).apply(values).make() == main
+
+    main = Main(list_a=[1, 2], dict_a={"a": 3, "b": 4})
+    values = chz.beta_to_blueprint_values(main)
+    assert values == {
+        "list_a": [1, 2],
+        "dict_a": {"a": 3, "b": 4},
+    }
+    assert chz.Blueprint(Main).apply(values).make() == main
 
 
 def test_duplicate_fields():

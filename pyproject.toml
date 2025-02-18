@@ -1,6 +1,6 @@
 [project]
 name = "chz"
-version = "0.1.0"
+version = "0.2.0"
 description = "chz is a library for managing configuration"
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -109,7 +109,6 @@ class subclass(MetaFactory):
         base_cls: InstantiableType | _MISSING_TYPE = MISSING,
         default_cls: InstantiableType | _MISSING_TYPE = MISSING,
     ) -> None:
-
         super().__init__()
         self._base_cls = base_cls
         self._default_cls = default_cls
@@ -288,19 +287,31 @@ def _find_subclass(spec: str, superclass: TypeForm):
     if module_name is not None:
         module = _module_from_name(module_name)
         # TODO: think about this type ignore
-        return _maybe_generic(_module_getattr(module, base), generic, template=superclass)  # type: ignore[arg-type]
+        return _maybe_generic(
+            _module_getattr(module, base),
+            generic,
+            template=superclass,  # type: ignore[arg-type]
+        )
 
     visited_subclasses = set()
     base_class_origin = getattr(superclass, "__origin__", superclass)
 
-    if not is_instantiable_type(base_class_origin) or base_class_origin in {
-        object,
-        typing.Any,
-        typing_extensions.Any,
-    }:
+    if not is_instantiable_type(base_class_origin):
         raise MetaFromString(
             f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
         )
+    if base_class_origin in {object, typing.Any, typing_extensions.Any}:
+        try:
+            return _maybe_generic(
+                _module_getattr(_module_from_name("__main__"), base),
+                generic,
+                template=superclass,  # type: ignore[arg-type]
+            )
+        except MetaFromString:
+            raise MetaFromString(
+                f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
+            ) from None
+
     assert base_class_origin is not type
 
     all_subclasses = collections.deque(base_class_origin.__subclasses__())
@@ -367,7 +378,6 @@ def _return_prospective(obj: Any, annotation: TypeForm, factory: str) -> Any:
 
 
 def get_unspecified_from_annotation(annotation: TypeForm) -> Callable[..., Any] | None:
-
     if typing.get_origin(annotation) is type:
         base_type = typing.get_args(annotation)[0]
         if not isinstance(getattr(base_type, "__origin__", base_type), type):
@@ -401,7 +411,6 @@ class standard(MetaFactory):
         unspecified: Callable[..., Any] | None = None,
         default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
     ) -> None:
-
         super().__init__()
         self._annotation = annotation
         self.original_unspecified = unspecified
@@ -434,7 +443,6 @@ class standard(MetaFactory):
         )
 
     def unspecified_factory(self) -> Callable[..., Any] | None:
-
         if (
             self.computed_unspecified is not None
             and typing.get_origin(self.computed_unspecified) is type
@@ -447,14 +455,12 @@ class standard(MetaFactory):
         return self.computed_unspecified
 
     def from_string(self, factory: str) -> Callable[..., Any]:
-
         if ":" in factory:
             module_name, var = factory.split(":", 1)
 
             # fun lambda case
             # TODO: add docs for fun lambda case
             if module_name == "lambda" or module_name.startswith("lambda "):
-
                 default_module = self.default_module
                 if isinstance(default_module, _MISSING_TYPE) or default_module is None:
                     eval_ctx = None
@@ -484,7 +490,6 @@ class standard(MetaFactory):
             return _return_prospective(typ, self.annotation, factory=factory)
 
         try:
-
             if self.annotation in {object, typing.Any, typing_extensions.Any}:
                 return _find_subclass(factory, self.annotation)
 
@@ -518,7 +523,6 @@ class standard(MetaFactory):
                 return lambda: None
 
         except MetaFromString as e:
-
             try:
                 default_module = self.default_module
                 if isinstance(default_module, str):

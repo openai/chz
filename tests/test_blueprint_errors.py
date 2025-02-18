@@ -1,7 +1,7 @@
 import pytest
 
 import chz
-from chz.blueprint import ConstructionError, ExtraneousBlueprintArg
+from chz.blueprint import ConstructionException, ExtraneousBlueprintArg
 
 
 def test_target_positional_only():
@@ -14,7 +14,7 @@ def test_target_positional_only():
         return a
 
     with pytest.raises(
-        ConstructionError,
+        ConstructionException,
         match="Cannot construct bad because it has positional-only parameter a without a default",
     ):
         chz.entrypoint(bad, argv=[])
@@ -24,14 +24,15 @@ def test_target_args_kwargs():
     def bad1(*args): ...
 
     with pytest.raises(
-        ConstructionError, match=r"Cannot collect parameters from bad1 due to \*args parameter args"
+        ConstructionException,
+        match=r"Cannot collect parameters from bad1 due to \*args parameter args",
     ):
         chz.entrypoint(bad1, argv=[])
 
     def bad2(**kwargs): ...
 
     with pytest.raises(
-        ConstructionError,
+        ConstructionException,
         match=r"Cannot collect parameters from bad2 due to \*\*kwargs parameter kwargs",
     ):
         chz.entrypoint(bad2, argv=[])
@@ -42,7 +43,7 @@ def test_target_bad_signature():
 
     bad.__text_signature__ = "not a signature"
 
-    with pytest.raises(ConstructionError, match=r"Failed to get signature for bad"):
+    with pytest.raises(ConstructionException, match=r"Failed to get signature for bad"):
         chz.entrypoint(bad, argv=[])
 
 

@@ -178,12 +178,10 @@ def __eq__(self, other):
 
 def __hash__(self) -> int:
     try:
-        return hash(
-            tuple((name, getattr(self, f.x_name)) for name, f in self.__chz_fields__.items())
-        )
+        return hash(tuple((name, getattr(self, name)) for name in self.__chz_fields__))
     except TypeError as e:
-        for name, f in self.__chz_fields__.items():
-            value = getattr(self, f.x_name)
+        for name in self.__chz_fields__:
+            value = getattr(self, name)
             try:
                 hash(value)
             except TypeError:
@@ -212,11 +210,16 @@ def __chz_validate__(self) -> None:
         validator(self)
 
 
+@functools.lru_cache()
+def _get_init_properties(cls: type) -> list[str]:
+    return [
+        name
+        for name, _obj in inspect.getmembers_static(cls, lambda o: isinstance(o, init_property))
+    ]
+
+
 def __chz_init_property__(self) -> None:
-    # TODO: getmembers_static in 3.11?
-    for name, _obj in inspect.getmembers_static(
-        self.__class__, lambda o: isinstance(o, init_property)
-    ):
+    for name in _get_init_properties(self.__class__):
         getattr(self, name)
 
 
@@ -610,34 +613,55 @@ def beta_to_blueprint_values(obj) -> Any:
         b: str
 
     foo = Foo(a=1, b="hello")
-    bfoo = chz.Blueprint(Foo)
-    assert bfoo.apply(chz.beta_to_blueprint_values(foo)).make() == foo
+    assert chz.Blueprint(Foo).apply(chz.beta_to_blueprint_values(foo)).make() == foo
     ```
 
     See also: asdict
     """
     blueprint_values = {}
-    for field_name, field_info in obj.__chz_fields__.items():
-        field_value = getattr(obj, field_info.x_name)
-        if hasattr(field_value, "__chz_fields__"):
-            if (
-                field_info.meta_factory is not None
-                and type(field_value) is not field_info.meta_factory.unspecified_factory()
-            ):
-                # Try to detect when we have used polymorphic construction
-                # We only handle type (not function) meta-factories
-                # As subclass is the default meta-factory, we also only include
-                # the type if the instance type is different from the default
-                blueprint_values[field_name] = type(field_value)
 
-            blueprint_values.update(
-                {
-                    f"{field_name}.{name}": value
-                    for name, value in beta_to_blueprint_values(field_value).items()
-                }
-            )
+    def join_arg_path(parent: str, child: str) -> str:
+        if not parent:
+            return child
+        if child.startswith("."):
+            return parent + child
+        return parent + "." + child
+
+    def inner(obj: Any, path: str):
+        if hasattr(obj, "__chz_fields__"):
+            for field_name, field_info in obj.__chz_fields__.items():
+                value = getattr(obj, field_info.x_name)
+                param_path = join_arg_path(path, field_name)
+                if field_info.meta_factory is not None and (
+                    type(value)
+                    is not typing.get_origin(field_info.meta_factory.unspecified_factory())
+                ):
+                    # Try to detect when we have used polymorphic construction
+                    blueprint_values[param_path] = type(value)
+
+                inner(value, param_path)
+
+        elif (
+            isinstance(obj, dict)
+            and all(isinstance(k, str) for k in obj.keys())
+            and any(is_chz(v) for v in obj.values())
+        ):
+            for k, v in obj.items():
+                param_path = join_arg_path(path, k)
+                blueprint_values[param_path] = type(v)  # may be overridden if not needed
+                inner(v, param_path)
+
+        elif isinstance(obj, (list, tuple)) and any(is_chz(v) for v in obj):
+            for i, v in enumerate(obj):
+                param_path = join_arg_path(path, str(i))
+                blueprint_values[param_path] = type(v)  # may be overridden if not needed
+                inner(v, param_path)
+
         else:
-            blueprint_values[field_name] = field_value
+            blueprint_values[path] = obj
+
+    inner(obj, "")
+
     return blueprint_values
 
 

@@ -1,5 +1,6 @@
 # ruff: noqa: UP006
 # ruff: noqa: UP007
+# ruff: noqa: UP045
 import collections.abc
 import enum
 import fractions
@@ -42,6 +43,7 @@ def test_type_repr():
 
 
 def test_is_subtype_instance_basic():
+    assert is_subtype_instance(None, None)
     assert is_subtype_instance(1, int)
     assert is_subtype_instance(True, bool)
 
@@ -501,6 +503,189 @@ def test_is_subtype_instance_callable() -> None:
     assert not is_subtype_instance(lambda: A, typing.Callable[[P], None])
 
 
+def test_is_subtype_instance_callable_protocol():
+    class A: ...
+
+    class B(A): ...
+
+    class C(B): ...
+
+    class P1(typing.Protocol):
+        def __call__(self, x: B) -> None: ...
+
+    def p1(x: B) -> None: ...
+    def p2(x: A) -> None: ...
+    def p3(x: B = ...) -> None: ...
+    def p4(x: B, y: int = ...) -> None: ...
+
+    assert is_subtype_instance(p1, P1)
+    assert is_subtype_instance(p2, P1)
+    assert is_subtype_instance(p3, P1)
+    assert is_subtype_instance(p4, P1)
+
+    def p5(x: B, /) -> None: ...
+    def p6(y: B, /) -> None: ...
+    def p7(x: C) -> None: ...
+    def p8(y: B) -> None: ...
+    def p9(x: B, y: int) -> None: ...
+
+    assert not is_subtype_instance(p5, P1)
+    assert not is_subtype_instance(p6, P1)
+    assert not is_subtype_instance(p7, P1)
+    assert not is_subtype_instance(p8, P1)
+    assert not is_subtype_instance(p9, P1)
+
+    class P2(typing.Protocol):
+        def __call__(self, x: B, /) -> None: ...
+
+    assert is_subtype_instance(p1, P2)
+    assert is_subtype_instance(p2, P2)
+    assert is_subtype_instance(p3, P2)
+    assert is_subtype_instance(p4, P2)
+    assert is_subtype_instance(p5, P2)
+    assert is_subtype_instance(p6, P2)
+
+    class P3(typing.Protocol):
+        def __call__(self, x: B, y: int = ...) -> None: ...
+
+    assert not is_subtype_instance(p1, P3)
+    assert not is_subtype_instance(p9, P3)
+
+    def p10(*args: int | A) -> None: ...
+    def p11(*args: int | C) -> None: ...
+
+    assert is_subtype_instance(p10, P3)
+    assert not is_subtype_instance(p11, P3)
+
+    class P4(typing.Protocol):
+        def __call__(self, x: B, *, y: int) -> None: ...
+
+    assert not is_subtype_instance(p1, P4)
+    assert is_subtype_instance(p4, P4)
+
+    def p12(x: B, *, y: int = ...) -> None: ...
+    def p13(x: B, *, y: int) -> None: ...
+    def p14(x: B, *, y: B = ...) -> None: ...
+    def p15(**kwargs: int | B) -> None: ...
+    def p16(x: B, **kwargs: int) -> None: ...
+    def p17(x: B, *, y: int, z: int = ...) -> None: ...
+    def p18(x: B, y: B) -> None: ...
+
+    assert is_subtype_instance(p4, P4)
+    assert is_subtype_instance(p9, P4)
+    assert is_subtype_instance(p12, P4)
+    assert is_subtype_instance(p13, P4)
+    assert not is_subtype_instance(p14, P4)
+    assert not is_subtype_instance(p15, P4)
+    assert not is_subtype_instance(p16, P4)
+    assert is_subtype_instance(p17, P4)
+    assert not is_subtype_instance(p18, P4)
+
+    class P5(typing.Protocol):
+        def __call__(self, x: B, *, y: int = ...) -> None: ...
+
+    assert is_subtype_instance(p4, P5)
+    assert not is_subtype_instance(p9, P5)
+    assert is_subtype_instance(p12, P5)
+    assert not is_subtype_instance(p13, P5)
+    assert not is_subtype_instance(p14, P5)
+    assert not is_subtype_instance(p15, P5)
+    assert not is_subtype_instance(p16, P5)
+    assert not is_subtype_instance(p17, P5)
+    assert not is_subtype_instance(p18, P5)
+
+    class P7(typing.Protocol):
+        def __call__(self, x: B, **kwargs: B) -> None: ...
+
+    assert not is_subtype_instance(p1, P7)
+    assert not is_subtype_instance(p4, P7)
+    assert not is_subtype_instance(p12, P7)
+
+    def p19(x: B, **kwargs: A) -> None: ...
+    def p20(x: B, **kwargs: C) -> None: ...
+    def p21(x: B, y: B, **kwargs: B) -> None: ...
+    def p22(x: B, *, y: B, **kwargs: B) -> None: ...
+    def p23(x: B, *, y: int, **kwargs: B) -> None: ...
+
+    assert is_subtype_instance(p19, P7)
+    assert not is_subtype_instance(p20, P7)
+    assert not is_subtype_instance(p21, P7)
+    assert is_subtype_instance(p22, P7)
+    assert not is_subtype_instance(p23, P7)
+
+    class P8(typing.Protocol):
+        def __call__(self) -> B: ...
+
+    def p22() -> A: ...
+    def p23() -> C: ...
+
+    assert not is_subtype_instance(p22, P8)
+    assert is_subtype_instance(p23, P8)
+
+
+def test_is_subtype_instance_protocol_chz_callable():
+    class P(typing.Protocol):
+        def __call__(self, a: int) -> int: ...
+
+    import chz
+
+    @chz.chz
+    class Bad:
+        def __call__(self) -> int: ...
+
+    @chz.chz
+    class Good:
+        def __call__(self, a: int) -> int: ...
+
+    assert not is_subtype_instance(Bad(), P)
+    assert not is_subtype_instance(Bad, P)
+    assert is_subtype_instance(Good(), P)
+    assert not is_subtype_instance(Good, P)
+
+
+def test_is_subtype_instance_protocol_attr():
+    class A: ...
+
+    class B(A): ...
+
+    class C(B): ...
+
+    class FooProto(typing.Protocol):
+        x: B
+
+        def foo(self) -> int: ...
+
+    class Foo:
+        def __init__(self, x) -> None:
+            self.x = x
+
+        def foo(self) -> int:
+            return 1
+
+    assert not is_subtype_instance(Foo(A()), FooProto)
+    assert is_subtype_instance(Foo(B()), FooProto)
+    assert is_subtype_instance(Foo(C()), FooProto)
+
+    b = Foo(B())
+    b.foo = 1
+    assert not is_subtype_instance(b, FooProto)
+
+    assert not is_subtype_instance(object(), FooProto)
+
+
+def test_is_subtype_instance_runtime_protocol():
+    @typing.runtime_checkable
+    class FooProto(typing.Protocol):
+        def foo(self) -> int: ...
+
+    class Foo:
+        def foo(self) -> int:
+            return 1
+
+    assert is_subtype_instance(Foo(), FooProto)
+    assert not is_subtype_instance(object(), FooProto)
+
+
 def test_is_subtype_instance_literal():
     assert is_subtype_instance(1, typing.Literal[1])
     assert is_subtype_instance("str", typing.Literal["str"])
@@ -510,6 +695,9 @@ def test_is_subtype_instance_literal():
 
     assert not is_subtype_instance(1, typing.Literal[2])
     assert not is_subtype_instance("str", typing.Literal[1, "bytes"])
+
+    assert is_subtype_instance(None, typing.Literal[None])
+    assert is_subtype_instance(None, typing.Literal[1, "bytes", None])
 
 
 def test_is_subtype_instance_type():
@@ -549,19 +737,6 @@ def test_is_subtype_instance_enum():
     assert is_subtype_instance(Color.RED, typing.Literal[Color.RED])
     assert is_subtype_instance(Color.RED, typing.Literal[Color.RED, Color.GREEN])
     assert not is_subtype_instance(Color.RED, typing.Literal[Color.GREEN])
-
-
-def test_is_subtype_instance_protocol():
-    @typing.runtime_checkable
-    class FooProto(typing.Protocol):
-        def foo(self) -> int: ...
-
-    class Foo:
-        def foo(self) -> int:
-            return 1
-
-    assert is_subtype_instance(Foo(), FooProto)
-    assert not is_subtype_instance(object(), FooProto)
 
 
 def test_is_subtype_instance_new_type():
@@ -610,7 +785,10 @@ def test_is_subtype_instance_pydantic_utils() -> None:
             handler: pydantic.GetCoreSchemaHandler,
         ) -> pydantic_core.core_schema.CoreSchema:
             return get_polymorphic_generic_model_schema(
-                cls, __class__, source, handler  # type:ignore[name-defined]
+                cls,
+                __class__,
+                source,
+                handler,  # type:ignore[name-defined]
             )
 
     class Bar(Foo[T], typing.Generic[T]):
@@ -658,6 +836,62 @@ def test_is_subtype():
     assert is_subtype(int, int | str)
     assert is_subtype(str, int | str)
     assert not is_subtype(bytes, int | str)
+
+    assert is_subtype(int | str, str | int)
+    assert is_subtype(int | str, int | bytes | str)
+    assert not is_subtype(int | str | bytes, int | str)
+
+    assert is_subtype(int, typing.Union[int, str])
+    assert is_subtype(str, typing.Union[int, str])
+    assert not is_subtype(bytes, typing.Union[int, str])
+
+    assert is_subtype(typing.Union[int, str], typing.Union[str, int])
+    assert is_subtype(typing.Union[int, str], typing.Union[int, bytes, str])
+    assert not is_subtype(typing.Union[int, str, bytes], typing.Union[int, str])
+
+    assert is_subtype(None, None)
+    assert is_subtype(None, int | None)
+    assert is_subtype(None, typing.Optional[int])
+
+    assert is_subtype(typing.Literal[1, 2], typing.Literal[3, 2, 1])
+    assert not is_subtype(typing.Literal[1, 2, 4], typing.Literal[3, 2, 1])
+    assert is_subtype(typing.Literal[1, 2], str | int)
+    assert is_subtype(typing.Literal[1, 2], str | typing.Literal[1, 2, 3])
+
+    assert is_subtype(typing.Callable[[int], str], typing.Callable[[int], str])
+    assert not is_subtype(typing.Callable[[int], str], typing.Callable[[int, int], str])
+    assert is_subtype(typing.Callable[[int], str], typing.Callable[[int], str | None])
+    assert not is_subtype(typing.Callable[[int], str | None], typing.Callable[[int], str])
+    assert is_subtype(typing.Callable[[int | None], None], typing.Callable[[int], None])
+    assert not is_subtype(typing.Callable[[int], None], typing.Callable[[int | None], None])
+    assert not is_subtype(typing.Callable[[int], None], typing.Callable[[str], None])
+
+
+def test_is_subtype_protocol():
+    class P1(typing.Protocol):
+        def foo(self) -> int: ...
+
+    class P2(typing.Protocol):
+        def foo(self) -> int: ...
+        def bar(self) -> int: ...
+
+    class Good:
+        def foo(self) -> int: ...
+
+    class Bad:
+        def bar(self) -> int: ...
+
+    assert not is_subtype(P1, P2)
+    assert is_subtype(P2, P1)
+
+    assert is_subtype(Good, P1)
+    assert not is_subtype(Bad, P1)
+    assert not is_subtype(Good, P2)
+
+    def a() -> P1: ...
+
+    assert is_subtype_instance(a, typing.Callable[..., P1])
+    assert not is_subtype_instance(a, typing.Callable[..., P2])
 
 
 def test_no_return():
@@ -714,6 +948,7 @@ def test_try_cast_list():
     assert _simplistic_try_cast("[1]", list) == [1]
     assert _simplistic_try_cast("[1,'str']", list) == [1, "str"]
     assert _simplistic_try_cast("[1,2]", list[int]) == [1, 2]
+
     with pytest.raises(CastError, match=r"Could not cast '\[1,2\]' to list\[str\]"):
         _simplistic_try_cast("[1,2]", list[str])
     with pytest.raises(CastError, match=r"Could not cast '\[1,str\]' to list"):
@@ -746,6 +981,20 @@ def test_try_cast_sequence_iterable():
             _simplistic_try_cast("[1,2]", origin[str])
         with pytest.raises(CastError, match=r"Could not cast '\[1,str\]' to \w+"):
             _simplistic_try_cast("[1,str]", origin)
+
+
+def test_try_cast_dict():
+    assert _simplistic_try_cast("{1: 2}", dict) == {1: 2}
+    assert _simplistic_try_cast("{1: 2}", dict[int, int]) == {1: 2}
+    assert _simplistic_try_cast("{1: '2'}", dict[int, str]) == {1: "2"}
+    assert _simplistic_try_cast("{1: '2'}", dict[int, typing.Any]) == {1: "2"}
+
+    with pytest.raises(CastError, match=r"""Could not cast "\{1: '2'\}" to dict\[int, int\]"""):
+        _simplistic_try_cast("{1: '2'}", dict[int, int])
+    with pytest.raises(CastError, match=r"""Could not cast "\{1: '2'\}" to dict\[str, str\]"""):
+        _simplistic_try_cast("{1: '2'}", dict[str, str])
+    with pytest.raises(CastError, match=r"Could not cast '\{str: str\}' to dict"):
+        _simplistic_try_cast("{str: str}", dict)
 
 
 def test_try_cast_tuple_unpack():

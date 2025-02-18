@@ -522,7 +522,6 @@ def test_is_override_mixin_catches_bad_types() -> None:
 
 
 def test_is_override_catches_bad_generic_default_factory() -> None:
-
     class Box(Generic[T]):
         def __init__(self, value: T):
             self.value = value
@@ -665,7 +664,9 @@ def test_is_override_mixin_works_with_x_fields() -> None:
 
     @chz.chz
     class BadOverride(Base, chz.validators.IsOverrideMixin):
-        X_value: tuple[str, ...] = chz.field(default=("look at me eagerly create", "a tuple of strings"))  # type: ignore
+        X_value: tuple[str, ...] = chz.field(
+            default=("look at me eagerly create", "a tuple of strings")
+        )  # type: ignore
 
     @chz.chz
     class BadOverride2(Base, chz.validators.IsOverrideMixin):

@@ -34,8 +34,7 @@ import typing_extensions
 def type_repr(typ) -> str:
     # Similar to typing._type_repr
     if isinstance(typ, (types.GenericAlias, typing._GenericAlias)):
-        if typ.__origin__.__module__ in ("typing", "typing_extensions", "collections.abc"):
-
+        if typ.__origin__.__module__ in {"typing", "typing_extensions", "collections.abc"}:
             if typ.__origin__ is collections.abc.Callable:
                 return repr(typ).removeprefix("collections.abc.").removeprefix("typing.")
 
@@ -146,6 +145,14 @@ def eval_in_context(annot: str, obj: object) -> typing.Any:
     return eval(annot, obj_globals, obj_locals)
 
 
+def maybe_eval_in_context(annot: str, obj: object) -> typing.Any:
+    if isinstance(annot, str):
+        return eval_in_context(annot, obj)
+    if annot is inspect.Parameter.empty:
+        return typing.Any
+    return annot
+
+
 if sys.version_info >= (3, 11):
     typing_Never = (
         typing.NoReturn,
@@ -198,14 +205,14 @@ def _sort_for_union_preference(typs: tuple[TypeForm, ...]):
 
 
 def is_args_unpack(t: TypeForm) -> bool:
-    return getattr(t, "__unpacked__", False) or getattr(t, "__origin__", t) in (
+    return getattr(t, "__unpacked__", False) or getattr(t, "__origin__", t) in {
         typing.Unpack,
         typing_extensions.Unpack,
-    )
+    }
 
 
 def is_kwargs_unpack(t: TypeForm) -> bool:
-    return getattr(t, "__origin__", t) in (typing.Unpack, typing_extensions.Unpack)
+    return getattr(t, "__origin__", t) in {typing.Unpack, typing_extensions.Unpack}
 
 
 def _unpackable_arg_length(t: TypeForm) -> tuple[int, bool]:
@@ -213,7 +220,7 @@ def _unpackable_arg_length(t: TypeForm) -> tuple[int, bool]:
     if getattr(t, "__unpacked__", False):
         assert t.__origin__ is tuple  # TODO
         item_args = t.__args__
-    elif getattr(t, "__origin__", t) in (typing.Unpack, typing_extensions.Unpack):
+    elif getattr(t, "__origin__", t) in {typing.Unpack, typing_extensions.Unpack}:
         assert len(t.__args__) == 1
         assert t.__args__[0].__origin__ is tuple
         item_args = t.__args__[0].__args__
@@ -236,7 +243,6 @@ def _unpackable_arg_length(t: TypeForm) -> tuple[int, bool]:
 def _cast_unpacked_tuples(
     inst_items: list[str], args: tuple[TypeForm, ...]
 ) -> tuple[typing.Any, ...]:
-
     # Cursed PEP 646 stuff
     arg_lengths = [_unpackable_arg_length(arg) for arg in args]
     min_length = sum(arg_length for arg_length, _ in arg_lengths)
@@ -254,7 +260,7 @@ def _cast_unpacked_tuples(
             if arg_unbounded:
                 arg_length += len(inst_items) - min_length
                 min_length = len(inst_items)
-            if getattr(arg, "__origin__", arg) in (typing.Unpack, typing_extensions.Unpack):
+            if getattr(arg, "__origin__", arg) in {typing.Unpack, typing_extensions.Unpack}:
                 assert len(arg.__args__) == 1
                 assert arg.__args__[0].__origin__ is tuple
                 arg = arg.__args__[0]
@@ -346,7 +352,7 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
         args = getattr(typ, "__args__", ())
         item_type = args[0] if args else typing.Any
 
-        if inst_str[0] in ("[", "("):
+        if inst_str[0] in {"[", "("}:
             try:
                 value = ast.literal_eval(inst_str)
             except (ValueError, SyntaxError):
@@ -389,6 +395,18 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
             # Cursed PEP 646 stuff
             return _cast_unpacked_tuples(inst_items, args)
 
+    if origin is dict or origin is collections.abc.Mapping:
+        if not inst_str:
+            return {}
+        if inst_str[0] == "{":
+            try:
+                value = ast.literal_eval(inst_str)
+            except (ValueError, SyntaxError):
+                raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}") from None
+            if is_subtype_instance(value, typ):
+                return value
+        raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
+
     if "torch" in sys.modules:
         import torch
 
@@ -401,7 +419,7 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
     if "enum" in sys.modules:
         import enum
 
-        if issubclass(origin, enum.Enum):
+        if isinstance(origin, type) and issubclass(origin, enum.Enum):
             try:
                 # Look up by name
                 return origin[inst_str]
@@ -433,13 +451,43 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
         if origin is pathlib.Path:
             return pathlib.Path(inst_str)
 
-    if not isinstance(origin, type):
-        raise CastError(f"Unrecognised type object {type_repr(typ)}")
-
     if hasattr(origin, "__chz_cast__"):
         return origin.__chz_cast__(inst_str)
 
+    if not isinstance(origin, type):
+        raise CastError(f"Unrecognised type object {type_repr(typ)}")
+
     raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
+
+
+class _SignatureOf:
+    def __init__(self, fn: typing.Callable, strip_self: bool = False):
+        self.fn = fn
+        self._sig = inspect.signature(fn)
+
+        self.pos = []
+        self.kwonly = {}
+        self.varpos = None
+        self.varkw = None
+
+        for param in self._sig.parameters.values():
+            if param.kind in {param.POSITIONAL_OR_KEYWORD, param.POSITIONAL_ONLY}:
+                self.pos.append(param)
+            elif param.kind is param.KEYWORD_ONLY:
+                self.kwonly[param.name] = param
+            elif param.kind is param.VAR_POSITIONAL and param.name != "__chz_args":
+                self.varpos = param
+            elif param.kind is param.VAR_KEYWORD:
+                self.varkw = param
+
+        if strip_self:
+            if self.pos[0].name != "self":
+                raise ValueError(f"Cannot strip self from signature of {self.fn}")
+            self.pos = self.pos[1:]
+
+        self.ret = self._sig.return_annotation
+        if isinstance(self.ret, str):
+            self.ret = eval_in_context(self.ret, self.fn)
 
 
 def is_subtype(left: TypeForm, right: TypeForm) -> bool:
@@ -452,6 +500,152 @@ def is_subtype(left: TypeForm, right: TypeForm) -> bool:
         return True
     if right_origin is typing.Any or right_origin is typing_extensions.Any:
         return True
+    if left_origin is None:
+        if right_origin is None or right_origin is type(None):
+            return True
+
+    if is_union_type(right_origin):
+        if is_union_type(left_origin):
+            possible_left_types = left_args
+        else:
+            possible_left_types = [left]
+        return all(
+            any(is_subtype(possible_left, right_arg) for right_arg in right_args)
+            for possible_left in possible_left_types
+        )
+
+    if right_origin is typing.Literal or right_origin is typing_extensions.Literal:
+        if left_origin is typing.Literal or left_origin is typing_extensions.Literal:
+            return all(left_arg in right_args for left_arg in left_args)
+        return False
+
+    if left_origin is typing.Literal or left_origin is typing_extensions.Literal:
+        return all(is_subtype_instance(left_arg, right) for left_arg in left_args)
+
+    if typing_extensions.is_protocol(left) and typing_extensions.is_protocol(right):
+        left_attrs = typing_extensions.get_protocol_members(left)
+        right_attrs = typing_extensions.get_protocol_members(right)
+        if not right_attrs.issubset(left_attrs):
+            return False
+
+        # TODO: this is incorrect
+        return True
+
+    if typing_extensions.is_protocol(right):
+        if not isinstance(left_origin, type):
+            return False
+
+        right_attrs = typing_extensions.get_protocol_members(right)
+        if not all(hasattr(left_origin, attr) for attr in right_attrs):
+            return False
+
+        # TODO: this is incorrect
+        return True
+
+    if isinstance(left, _SignatureOf) and isinstance(right, _SignatureOf):
+        empty = inspect.Parameter.empty
+
+        for left_param, right_param in zip(left.pos, right.pos):
+            if right_param.kind is right_param.POSITIONAL_OR_KEYWORD:
+                if right_param.name != left_param.name:
+                    return False
+                if left_param.kind is left_param.POSITIONAL_ONLY:
+                    return False
+            if right_param.default is not empty and left_param.default is empty:
+                return False
+            left_param_annot = maybe_eval_in_context(left_param.annotation, left.fn)
+            right_param_annot = maybe_eval_in_context(right_param.annotation, right.fn)
+            if not is_subtype(right_param_annot, left_param_annot):
+                return False
+
+        if len(left.pos) < len(right.pos):
+            # Okay if left has a *args that accepts all the extra args
+            if left.varpos is None:
+                return False
+            left_varpos_annot = maybe_eval_in_context(left.varpos.annotation, left.fn)
+            for i in range(len(left.pos), len(right.pos)):
+                right_param = right.pos[i]
+                right_param_annot = maybe_eval_in_context(right_param.annotation, right.fn)
+                if not is_subtype(right_param_annot, left_varpos_annot):
+                    return False
+
+        if len(left.pos) > len(right.pos):
+            # Must either have a default or correspond to a required keyword-only arg
+            for i in range(len(right.pos), len(left.pos)):
+                left_param = left.pos[i]
+                if left_param.default is not empty:
+                    continue
+                if (
+                    left_param.name in right.kwonly
+                    and left_param.kind is left_param.POSITIONAL_OR_KEYWORD
+                ):
+                    continue
+                return False
+
+        for name in left.kwonly.keys() & right.kwonly.keys():
+            right_param = right.kwonly[name]
+            left_param = left.kwonly[name]
+            if right_param.default is not empty and left_param.default is empty:
+                return False
+            left_param_annot = maybe_eval_in_context(left_param.annotation, left.fn)
+            right_param_annot = maybe_eval_in_context(right_param.annotation, right.fn)
+            if not is_subtype(right_param_annot, left_param_annot):
+                return False
+
+        for name in left.kwonly.keys() - right.kwonly.keys():
+            # Must either have a default or match a varkwarg
+            left_param = left.kwonly[name]
+            if left_param.default is not empty:
+                continue
+            if right.varkw is not None:
+                left_param_annot = maybe_eval_in_context(left_param.annotation, left.fn)
+                right_varkw_annot = maybe_eval_in_context(right.varkw.annotation, right.fn)
+                if is_subtype(right_varkw_annot, left_param_annot):
+                    continue
+            return False
+
+        right_only_kwonly = right.kwonly.keys() - left.kwonly.keys()
+        if right_only_kwonly:
+            # Must correspond to a positional-or-keyword arg
+            left_pos_or_kw = {p.name: p for p in left.pos if p.kind is p.POSITIONAL_OR_KEYWORD}
+            for name in right_only_kwonly:
+                if name not in left_pos_or_kw:
+                    return False
+                left_param = left_pos_or_kw[name]
+                if right.kwonly[name].default is not empty and left_param.default is empty:
+                    return False
+                left_param_annot = maybe_eval_in_context(left_param.annotation, left.fn)
+                right_param_annot = maybe_eval_in_context(right.kwonly[name].annotation, right.fn)
+                if not is_subtype(right_param_annot, left_param_annot):
+                    return False
+
+        if right.varkw is not None:
+            if left.varkw is None:
+                return False
+            right_varkw_annot = maybe_eval_in_context(right.varkw.annotation, right.fn)
+            left_varkw_annot = maybe_eval_in_context(left.varkw.annotation, left.fn)
+            if not is_subtype(right_varkw_annot, left_varkw_annot):
+                return False
+
+        if right.ret is not empty and left.ret is not empty:
+            # TODO: handle Cls.__init__ like below
+            if not is_subtype(left.ret, right.ret):
+                return False
+
+        return True
+
+    if left_origin is collections.abc.Callable and right_origin is collections.abc.Callable:
+        *left_params, left_ret = left_args
+        *right_params, right_ret = right_args
+        if len(left_params) != len(right_params):
+            return False
+        if not is_subtype(left_ret, right_ret):
+            return False
+        return all(
+            is_subtype(right_param, left_param)
+            for left_param, right_param in zip(left_params, right_params)
+        )
+
     # TODO: handle other special forms
 
     try:
@@ -515,6 +709,9 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
     if typ is typing.Any or typ is typing_extensions.Any:
         return True
 
+    if typ is None and inst is None:
+        return True
+
     if isinstance(typ, typing.TypeVar):
         if typ.__constraints__:
             # types must match exactly
@@ -541,7 +738,7 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
 
     if origin is typing.Union:
         return any(is_subtype_instance(inst, t) for t in args)
-    if origin is typing.Literal:
+    if origin is typing.Literal or origin is typing_extensions.Literal:
         return inst in args
 
     if origin is typing.LiteralString:
@@ -551,7 +748,7 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
         if not isinstance(inst, dict):
             return False
 
-        for k, v in typing.get_type_hints(origin).items():
+        for k, v in typing_extensions.get_type_hints(origin).items():
             if k in inst:
                 if not is_subtype_instance(inst[k], v):
                     return False
@@ -569,6 +766,43 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
             return True
         except ValidationError:
             return False
+
+    if typing_extensions.is_protocol(origin):
+        if getattr(origin, "_is_runtime_protocol", False):
+            return isinstance(inst, origin)
+        annotations = typing_extensions.get_type_hints(origin)
+        for attr in sorted(typing_extensions.get_protocol_members(origin)):
+            if not hasattr(inst, attr):
+                return False
+            if attr in annotations:
+                if not is_subtype_instance(getattr(inst, attr), annotations[attr]):
+                    return False
+            elif callable(getattr(origin, attr)):
+                if attr == "__call__" and isinstance(inst, (type, types.FunctionType)):
+                    # inst will have a better inspect.signature than inst.__call__
+                    inst_attr = inst
+                else:
+                    inst_attr = getattr(inst, attr)
+
+                if not callable(inst_attr):
+                    return False
+                try:
+                    signature = _SignatureOf(getattr(origin, attr), strip_self=True)
+                except ValueError:
+                    continue
+                if not is_subtype_instance(inst_attr, signature):
+                    return False
+            else:
+                raise AssertionError(f"Unexpected protocol member {attr} for {origin}")
+        return True
+
+    if isinstance(origin, _SignatureOf):
+        try:
+            inst_sig = _SignatureOf(inst)
+        except ValueError:
+            return True
+
+        return is_subtype(inst_sig, origin)
 
     # We're done handling special forms, now just need to handle things like generics
     if not isinstance(origin, type):
@@ -621,33 +855,29 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
     if origin is type:
         (type_type,) = args
         return issubclass(inst, type_type)
+
     if origin is collections.abc.Callable:
         try:
-            signature = inspect.signature(inst)
+            inst_sig = inspect.signature(inst)
         except ValueError:
             return True
         *params, ret = args
         if params != [...]:
             try:
-                bound = signature.bind(*params)
+                bound = inst_sig.bind(*params)
             except TypeError:
                 return False
             for param, callable_param_type in bound.arguments.items():
-                param = signature.parameters[param]
-                param_annot = param.annotation
+                param = inst_sig.parameters[param]
+                param_annot = maybe_eval_in_context(param.annotation, inst)
                 # ooh, contravariance
-                if param_annot is not param.empty:
-                    if isinstance(param_annot, str):
-                        param_annot = eval_in_context(param_annot, inst)
-                    if param.kind is param.VAR_POSITIONAL:
-                        if any(not is_subtype(cpt, param_annot) for cpt in callable_param_type):
-                            return False
-                    elif not is_subtype(callable_param_type, param_annot):
+                if param.kind is param.VAR_POSITIONAL:
+                    if any(not is_subtype(cpt, param_annot) for cpt in callable_param_type):
                         return False
-        if signature.return_annotation is not signature.empty:
-            ret_annot = signature.return_annotation
-            if isinstance(ret_annot, str):
-                ret_annot = eval_in_context(ret_annot, inst)
+                elif not is_subtype(callable_param_type, param_annot):
+                    return False
+        if inst_sig.return_annotation is not inst_sig.empty:
+            ret_annot = maybe_eval_in_context(inst_sig.return_annotation, inst)
             # inspect.signature(Cls) will have Cls.__init__, which is annotated as -> None
             if not (isinstance(inst, type) and ret_annot is None and is_subtype(inst, ret)):
                 if ret_annot is None:
@@ -668,12 +898,9 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
     return True
 
     # TODO: overloads
-    # TODO: more protocols, callback protocol
-    # TODO: non runtime checkable protocols
     # TODO: paramspec / concatenate
     # TODO: typeguard
     # TODO: annotated
-    # TODO: forwardref, future annotations
     # TODO: self
     # TODO: pep 692 unpack
     # TODO: typevartuple??

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import collections.abc
+import dataclasses
 import functools
 import inspect
 import io
@@ -9,12 +10,15 @@ import sys
 import textwrap
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable, Final, Generic, Mapping, Protocol, TypeVar
+from typing import Any, Callable, Final, Generic, Mapping, Protocol
+
+from typing_extensions import TypeVar
 
 import chz
 from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
 from chz.blueprint._argv import argv_to_blueprint_args
 from chz.blueprint._entrypoint import (
+    ConstructionException,
     EntrypointHelpException,
     ExtraneousBlueprintArg,
     InvalidBlueprintArg,
@@ -41,7 +45,7 @@ from chz.tiepin import (
 from chz.util import _MISSING_TYPE, MISSING
 
 _T = TypeVar("_T")
-_T_cov = TypeVar("_T_cov", covariant=True)
+_T_cov_def = TypeVar("_T_cov_def", covariant=True, default=Any)
 
 
 class SpecialArg: ...
@@ -58,6 +62,14 @@ class Castable(SpecialArg):
 
     def __hash__(self) -> int:
         return hash(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Castable):
+            try:
+                return _simplistic_try_cast(self.value, type(other)) == other
+            except CastError:
+                return False
+        return self.value == other.value
 
 
 class Reference(SpecialArg):
@@ -101,31 +113,68 @@ class _MakeResult:
     missing_params: list[str]
 
 
-class Blueprint(Generic[_T_cov]):
-    def __init__(self, target: type[_T_cov] | Callable[..., _T_cov]) -> None:
+def _entrypoint_caster(o: str) -> object:
+    raise chz.tiepin.CastError("Will not interpret entrypoint as a value")
+
+
+class Blueprint(Generic[_T_cov_def]):
+    def __init__(
+        self, target: chz.factories.MetaFactory | type[_T_cov_def] | Callable[..., _T_cov_def]
+    ) -> None:
         """Instantiate a Blueprint.
 
         Args:
             target: The target object or callable we will instantiate or call.
         """
-        if not callable(target):
-            raise ValueError(f"{target} is not callable")
-        self.target: Any = target
+
+        self.target = target
+
+        if isinstance(target, chz.factories.MetaFactory):
+            self.meta_factory = target
+            if isinstance(target, chz.factories.standard):
+                entrypoint_type = target.annotation
+                entrypoint_doc = getattr(entrypoint_type, "__doc__", "")
+            else:
+                entrypoint_type = object
+                entrypoint_doc = ""
+
+            self.entrypoint_repr = type_repr(entrypoint_type)
+        else:
+            self.meta_factory = chz.factories.standard(target)
+            entrypoint_type = target
+            if self.meta_factory.unspecified_factory() is None:
+                if not callable(target):
+                    raise ValueError(f"{target} is not callable")
+                self.meta_factory = chz.factories.standard(object, unspecified=target)
+                entrypoint_type = object
+
+            self.entrypoint_repr = type_repr(target)
+            entrypoint_doc = getattr(target, "__doc__", "")
+
+        self.param = _Param(
+            name="",
+            type=entrypoint_type,
+            meta_factory=self.meta_factory,
+            default=None,
+            doc=entrypoint_doc.strip() if entrypoint_doc else "",
+            blueprint_cast=_entrypoint_caster,
+            metadata={},
+        )
 
         self._arg_map = ArgumentMap([])
 
-    def clone(self) -> "Blueprint[_T_cov]":
+    def clone(self) -> Blueprint[_T_cov_def]:
         """Make a copy of this Blueprint."""
         return Blueprint(self.target).apply(self)
 
     def apply(
         self,
-        values: Blueprint[_T_cov] | Mapping[str, Any],
+        values: Blueprint[_T_cov_def] | Mapping[str, Any],
         layer_name: str | None = None,
         *,
         subpath: str | None = None,
         strict: bool = False,
-    ) -> Blueprint[_T_cov]:
+    ) -> Blueprint[_T_cov_def]:
         """Modify this Blueprint by partially applying some arguments.
 
         Args:
@@ -152,13 +201,15 @@ class Blueprint(Generic[_T_cov]):
 
         if strict:
             r = self._make_lazy()
-            self._arg_map.check_extraneous(r.used_args, r.all_params.keys(), target=self.target)
+            self._arg_map.check_extraneous(
+                r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+            )
 
         return self
 
     def apply_from_argv(
         self, argv: list[str], allow_hyphens: bool = False, layer_name: str = "command line"
-    ) -> Blueprint[_T_cov]:
+    ) -> Blueprint[_T_cov_def]:
         """Apply arguments from argv to this Blueprint."""
         values = argv_to_blueprint_args(
             [a for a in argv if a != "--help"], allow_hyphens=allow_hyphens
@@ -168,7 +219,7 @@ class Blueprint(Generic[_T_cov]):
 
         if "--help" in argv:
             argv.remove("--help")
-            raise EntrypointHelpException(self.get_help())
+            raise EntrypointHelpException(self.get_help(color=sys.stdout.isatty()))
         return self
 
     def _make_lazy(self) -> _MakeResult:
@@ -176,8 +227,10 @@ class Blueprint(Generic[_T_cov]):
         used_args: set[tuple[str, int]] = set()
         meta_factory_value: dict[str, Any] = {}
         missing_params: list[str] = []
-        value_mapping = _construct_blueprint(
-            self.target,
+
+        value_mapping: dict[str, Evaluatable] | ConstructionIssue | None
+        value_mapping = _construct_param(
+            self.param,
             "",
             self._arg_map,
             all_params=all_params,
@@ -185,8 +238,22 @@ class Blueprint(Generic[_T_cov]):
             meta_factory_value=meta_factory_value,
             missing_params=missing_params,
         )
-        if isinstance(value_mapping, ConstructionError):
-            raise value_mapping
+        if isinstance(value_mapping, ConstructionIssue):
+            raise ConstructionException(value_mapping.issue)
+
+        if value_mapping is None:
+            # value_mapping is None if _construct_param / _construct_unspecified_param
+            # wants us to fallback to the default or thinks we're missing required arguments
+            # This is sort of equivalent to what happens in _construct_factory
+            unspecified_factory = self.meta_factory.unspecified_factory()
+            if unspecified_factory is None:
+                raise ConstructionException(
+                    f"Cannot construct {self.target} because it has no unspecified factory"
+                )
+            value_mapping = {"": Thunk(unspecified_factory, {})}
+            if "" in missing_params:
+                missing_params.remove("")
+
         return _MakeResult(
             value_mapping=value_mapping,
             all_params=all_params,
@@ -195,10 +262,10 @@ class Blueprint(Generic[_T_cov]):
             missing_params=missing_params,
         )
 
-    def make(self) -> _T_cov:
-        """Instantiate or call the target object or callable."""
-        r = self._make_lazy()
-        self._arg_map.check_extraneous(r.used_args, r.all_params.keys(), target=self.target)
+    def _make_from_make_result(self, r: _MakeResult) -> _T_cov_def:
+        self._arg_map.check_extraneous(
+            r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+        )
         check_reference_targets(r.value_mapping, r.all_params.keys())
         # Note we check for extraneous args first, so we get better errors for typos
         if r.missing_params:
@@ -208,7 +275,14 @@ class Blueprint(Generic[_T_cov]):
         # __chz_blueprint__
         return evaluate(r.value_mapping)
 
-    def make_from_argv(self, argv: list[str] | None = None, allow_hyphens: bool = False) -> _T_cov:
+    def make(self) -> _T_cov_def:
+        """Instantiate or call the target object or callable."""
+        r = self._make_lazy()
+        return self._make_from_make_result(r)
+
+    def make_from_argv(
+        self, argv: list[str] | None = None, allow_hyphens: bool = False
+    ) -> _T_cov_def:
         """Like make, but suitable for command line entrypoints.
 
         This will apply arguments from argv to this Blueprint before attempting to make the target.
@@ -221,7 +295,7 @@ class Blueprint(Generic[_T_cov]):
 
         return self.make()
 
-    def get_help(self) -> str:
+    def get_help(self, *, color: bool = False) -> str:
         """Get help text for this Blueprint.
 
         Note that applied arguments may affect output here, e.g. in case of polymorphically
@@ -233,7 +307,9 @@ class Blueprint(Generic[_T_cov]):
         output = functools.partial(print, file=f)
 
         try:
-            self._arg_map.check_extraneous(r.used_args, r.all_params.keys(), target=self.target)
+            self._arg_map.check_extraneous(
+                r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+            )
         except ExtraneousBlueprintArg as e:
             output(f"WARNING: {e}\n")
         try:
@@ -246,27 +322,51 @@ class Blueprint(Generic[_T_cov]):
                 f"WARNING: Missing required arguments for parameter(s): {', '.join(r.missing_params)}\n"
             )
 
-        output(f"Entry point: {type_repr(self.target)}")
+        output(f"Entry point: {self.entrypoint_repr}")
         output()
-        if getattr(self.target, "__doc__", None):
-            output(textwrap.indent(self.target.__doc__, "  "))
+        if self.param.doc:
+            output(textwrap.indent(self.param.doc, "  "))
             output()
 
         param_output = []
         for param_path, param in r.all_params.items():
             # TODO: cast or meta_factory info, not just type
             found_arg = self._arg_map.get_kv(param_path)
+
+            if (
+                not isinstance(self.target, chz.factories.MetaFactory)
+                and param_path == ""
+                and found_arg is None
+            ):
+                # If we're not using root polymorphism, skip this param
+                continue
+
             if found_arg is None:
                 if param_path in r.meta_factory_value:
-                    found_arg_str = type_repr(r.meta_factory_value[param_path]) + " (meta_factory)"
+                    found_arg_str = type_repr(r.meta_factory_value[param_path])
+                    if color:
+                        found_arg_str += " \033[90m(meta_factory)\033[0m"
+                    else:
+                        found_arg_str += " (meta_factory)"
                 elif param.default is not None:
-                    found_arg_str = param.default.to_help_str() + " (default)"
+                    found_arg_str = param.default.to_help_str()
+                    if color:
+                        found_arg_str += " \033[90m(default)\033[0m"
+                    else:
+                        found_arg_str += " (default)"
                 elif (
                     param.meta_factory is not None
                     and (factory := param.meta_factory.unspecified_factory()) is not None
                     and factory is not param.type
                 ):
-                    found_arg_str = type_repr(factory) + " (blueprint_unspecified)"
+                    if getattr(factory, "__name__", None) == "<lambda>":
+                        found_arg_str = _lambda_repr(factory) or type_repr(factory)
+                    else:
+                        found_arg_str = type_repr(factory)
+                    if color:
+                        found_arg_str += " \033[90m(blueprint_unspecified)\033[0m"
+                    else:
+                        found_arg_str += " (blueprint_unspecified)"
                 else:
                     found_arg_str = "-"
             else:
@@ -275,23 +375,69 @@ class Blueprint(Generic[_T_cov]):
                 elif isinstance(found_arg.value, Reference):
                     found_arg_str = f"@={found_arg.value.ref}"
                 else:
-                    found_arg_str = repr(found_arg.value)
+                    found_arg_str = type_repr(found_arg.value)
                 if found_arg.layer_name:
-                    found_arg_str += f" (from {found_arg.layer_name})"
+                    if color:
+                        found_arg_str += (
+                            f" \033[90m(from \033[94m{found_arg.layer_name}\033[90m)\033[0m"
+                        )
+                    else:
+                        found_arg_str += f" (from {found_arg.layer_name})"
 
-            param_output.append((param_path, type_repr(param.type), found_arg_str, param.doc))
+            param_output.append(
+                (param_path or "<entrypoint>", type_repr(param.type), found_arg_str, param.doc)
+            )
 
         clip = 40
         lens = tuple(min(clip, max(map(len, column))) for column in zip(*param_output))
 
-        def pad(s: str, l: int) -> str:
-            if len(s) <= l:
-                return s.ljust(l)
-            return s.ljust(len(s) + (-len(s)) % 20)
-
         output("Arguments:")
         for p, typ, arg, doc in param_output:
-            output(f"  {pad(p, lens[0])}  {pad(typ, lens[1])}  {pad(arg, lens[2])}  {doc}".rstrip())
+            col = 0
+            target_col = 0
+
+            line = io.StringIO()
+            add = functools.partial(print, file=line, end="")
+
+            raw_string = p
+            add("  ")
+            if color:
+                add(f"\033[1m{raw_string}\033[0m")
+            else:
+                add(raw_string)
+
+            col += 2 + len(raw_string)
+            target_col += 2 + lens[0]
+            pad = (target_col - col) if col <= target_col else (-len(raw_string)) % 20
+            add(" " * pad)
+            col += pad
+
+            raw_string = typ
+            add("  ")
+            add(raw_string)
+            col += 2 + len(raw_string)
+            target_col += 2 + lens[1]
+            pad = (target_col - col) if col <= target_col else (-len(raw_string)) % 20
+            add(" " * pad)
+            col += pad
+
+            raw_string = arg
+            add("  ")
+            add(raw_string)
+            col += 2 + len(raw_string)
+            target_col += 2 + lens[2]
+            pad = (target_col - col) if col <= target_col else (-len(raw_string)) % 20
+            add(" " * pad)
+            col += pad
+
+            raw_string = doc
+            add("  ")
+            if color:
+                add(f"\033[90m{raw_string}\033[0m")
+            else:
+                add(raw_string)
+
+            output(line.getvalue().rstrip())
 
         return f.getvalue()
 
@@ -369,12 +515,12 @@ class _Param:
         return _simplistic_try_cast(value, self.type)
 
 
-def _collect_params(obj) -> list[_Param] | ConstructionError:
+def _collect_params(obj) -> list[_Param] | ConstructionIssue:
     obj_origin = getattr(obj, "__origin__", obj)  # handle generic chz classes
 
     params: list[_Param] = []
-    if hasattr(obj_origin, "__chz_fields__"):
-        for field in obj_origin.__chz_fields__.values():
+    if chz.is_chz(obj_origin):
+        for field in chz.chz_fields(obj_origin).values():
             params.append(
                 _Param(
                     name=field.logical_name,
@@ -383,26 +529,49 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
                     default=_Default.from_field(field),
                     doc=field._doc,
                     blueprint_cast=field._blueprint_cast,
-                    metadata=field.metadata,
+                    metadata=(field.metadata or {}),
                 )
             )
+        return params
+
+    if "enum" in sys.modules:
+        import enum
+
+        if type(obj) is enum.EnumMeta:
+            return ConstructionIssue(f"Cannot collect parameters from Enum class {obj.__name__}")
+
+    if isinstance(obj, functools.partial) and chz.is_chz(obj.func):
+        if obj.args:
+            return ConstructionIssue(
+                f"Cannot collect parameters from partial function of chz class "
+                f"{type_repr(obj.func)} with positional arguments"
+            )
+        ret = _collect_params(obj.func)
+        if isinstance(ret, ConstructionIssue):
+            return ret
+        for param in ret:
+            if param.name in obj.keywords:
+                param = dataclasses.replace(
+                    param, default=_Default(value=obj.keywords[param.name], factory=MISSING)
+                )
+            params.append(param)
         return params
 
     if callable(obj):
         try:
             signature = inspect.signature(obj)
         except ValueError:
-            return ConstructionError(f"Failed to get signature for {obj.__name__}")
+            return ConstructionIssue(f"Failed to get signature for {obj.__name__}")
         for i, (name, sigparam) in enumerate(signature.parameters.items()):
             if sigparam.kind == sigparam.POSITIONAL_ONLY:
                 if sigparam.default is sigparam.empty:
-                    return ConstructionError(
+                    return ConstructionIssue(
                         f"Cannot construct {obj.__name__} because it has positional-only "
                         f"parameter {name} without a default"
                     )
                 continue
             if sigparam.kind == sigparam.VAR_POSITIONAL:
-                return ConstructionError(
+                return ConstructionIssue(
                     f"Cannot collect parameters from {obj.__name__} due to *args parameter {name}"
                 )
 
@@ -424,12 +593,12 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
 
             if sigparam.kind == sigparam.VAR_KEYWORD:
                 if not is_kwargs_unpack(param_annot):
-                    return ConstructionError(
+                    return ConstructionIssue(
                         f"Cannot collect parameters from {obj.__name__} due to "
                         f"**kwargs parameter {name}. Only Unpack[TypedDict] is supported."
                     )
                 if len(param_annot.__args__) != 1 or not is_typed_dict(param_annot.__args__[0]):
-                    return ConstructionError(
+                    return ConstructionIssue(
                         f"Cannot collect parameters from {obj.__name__}, expected Unpack[TypedDict], not {param_annot}"
                     )
                 for key, annotation in typing.get_type_hints(param_annot.__args__[0]).items():
@@ -465,7 +634,7 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
         # See test_nested_all_defaults and variants
         return params
 
-    return ConstructionError(
+    return ConstructionIssue(
         f"Could not collect parameters to construct {obj} of type {type_repr(obj)}"
     )
 
@@ -473,15 +642,14 @@ def _collect_params(obj) -> list[_Param] | ConstructionError:
 def _collect_variadic_params(
     obj: object, obj_path: str, arg_map: ArgumentMap
 ) -> tuple[list[_Param], Callable[..., Any], list[Any]] | None:
-
     obj_origin: Any = getattr(obj, "__origin__", obj)
-    if obj_origin not in (
+    if obj_origin not in {
         list,
         tuple,
         collections.abc.Sequence,
         dict,
         collections.abc.Mapping,
-    ) and not is_typed_dict(obj_origin):
+    } and not is_typed_dict(obj_origin):
         return None
 
     elements = set()
@@ -492,7 +660,7 @@ def _collect_variadic_params(
             assert element
             elements.add(element)
 
-    if obj_origin in (list, tuple, collections.abc.Sequence):
+    if obj_origin in {list, tuple, collections.abc.Sequence}:
         max_element = max((int(e) for e in elements), default=-1)
         obj_type_construct = obj_origin
 
@@ -518,7 +686,7 @@ def _collect_variadic_params(
                 # heterogeneous tuple
                 if max_element >= len(args):
                     raise TypeError(
-                        f"Tuple type {obj} must take {len(args)} items; "
+                        f"Tuple type {obj} for {obj_path!r} must take {len(args)} items; "
                         f"arguments for index {max_element} were specified"
                         + (
                             f". Homogeneous tuples should be typed as tuple[{type_repr(args[0])}, ...] not tuple[{type_repr(args[0])}]"
@@ -552,7 +720,7 @@ def _collect_variadic_params(
         obj_constructor = sequence_constructor
         return params, obj_constructor, variadic_types
 
-    elif obj_origin in (dict, collections.abc.Mapping):
+    elif obj_origin in {dict, collections.abc.Mapping}:
         args = getattr(obj, "__args__", ())
         if len(args) == 0:
             element_type = object
@@ -622,12 +790,12 @@ class _WriteOnlyMapping(Generic[_K, _V], Protocol):
     def update(self, __m: Mapping[_K, _V], /) -> None: ...
 
 
-class ConstructionError(Exception):
+class ConstructionIssue:
     def __init__(self, issue: str) -> None:
         self.issue = issue
 
 
-def _construct_blueprint(
+def _construct_factory(
     obj: Callable[..., _T],
     obj_path: str,
     arg_map: ArgumentMap,
@@ -639,18 +807,17 @@ def _construct_blueprint(
     used_args: set[tuple[str, int]],
     meta_factory_value: _WriteOnlyMapping[str, Any],
     missing_params: list[str],
-) -> dict[str, Evaluatable] | ConstructionError:
-
+) -> dict[str, Evaluatable] | ConstructionIssue:
     obj_constructor = obj
     result = _collect_variadic_params(obj, obj_path, arg_map)
-    params: list[_Param] | ConstructionError
+    params: list[_Param] | ConstructionIssue
     if result is not None:
         params, obj_constructor, _ = result
     else:
         params = _collect_params(obj)
     del obj
 
-    if isinstance(params, ConstructionError):
+    if isinstance(params, ConstructionIssue):
         return params
 
     # Ideas:
@@ -668,7 +835,7 @@ def _construct_blueprint(
     value_mapping: dict[str, Evaluatable] = {}
 
     for param in params:
-        arg = _construct_arg_for_param(
+        sub_value_mapping = _construct_param(
             param,
             obj_path,
             arg_map,
@@ -677,9 +844,11 @@ def _construct_blueprint(
             meta_factory_value=meta_factory_value,
             missing_params=missing_params,
         )
-        if arg is None:
+        if isinstance(sub_value_mapping, ConstructionIssue):
+            return sub_value_mapping
+        if sub_value_mapping is None:
             continue
-        param_path, sub_value_mapping = arg
+        param_path = (obj_path + "." if obj_path else "") + param.name
         value_mapping.update(sub_value_mapping)
         kwargs[param.name] = ParamRef(param_path)
 
@@ -687,7 +856,104 @@ def _construct_blueprint(
     return value_mapping
 
 
-def _construct_arg_for_param(
+def _construct_unspecified_param(
+    param: _Param,
+    *,
+    param_path: str,
+    arg_map: ArgumentMap,
+    # Output parameters, do not use within this function
+    # See _MakeResult for docs about these parameters
+    all_params: _WriteOnlyMapping[str, _Param],
+    used_args: set[tuple[str, int]],
+    meta_factory_value: _WriteOnlyMapping[str, Any],
+    missing_params: list[str],
+) -> dict[str, Evaluatable] | ConstructionIssue | None:
+    if (
+        param.meta_factory is not None
+        and (factory := param.meta_factory.unspecified_factory()) is not None
+    ):
+        assert callable(factory)
+        sub_all_params: dict[str, _Param] = {}
+        sub_missing_params: list[str] = []
+        sub_used_args: set[tuple[str, int]] = set()
+        sub_meta_factory_value: dict[str, Any] = {}
+
+        value_mapping = _construct_factory(
+            factory,
+            param_path,
+            arg_map,
+            all_params=sub_all_params,
+            used_args=sub_used_args,
+            meta_factory_value=sub_meta_factory_value,
+            missing_params=sub_missing_params,
+        )
+        all_params.update(sub_all_params)
+        used_args.update(sub_used_args)  # TODO: should this be gated by use?
+        meta_factory_value.update(sub_meta_factory_value)
+
+        if isinstance(value_mapping, ConstructionIssue):
+            if param_path == "" and param.default is None:
+                # This is a little bit special case-y. But if we have a construction issue with
+                # the root param, it's much better to forward it than for the user to get an error
+                # about a missing required root argument.
+                return value_mapping
+        else:
+            thunk = value_mapping[param_path]
+            assert isinstance(thunk, Thunk)
+            # Only do this if we have subcomponents specified (including wildcards)
+            if thunk.kwargs:
+                meta_factory_value[param_path] = factory
+                missing_params.extend(sub_missing_params)
+                return value_mapping
+
+            # Alternatively, if a) we do not have a default, b) we're making a chz object
+            # c) we know instantiation would always work, that's fine too.
+            # A little special-case-y, but somewhat sane. It turns something that would
+            # error due to lack of default into something reasonable.
+            # See test_nested_all_defaults and variants
+            if (
+                param.default is None
+                and (
+                    chz.is_chz(factory)
+                    or (isinstance(factory, functools.partial) and chz.is_chz(factory.func))
+                )
+                and all(p.default is not None for p in sub_all_params.values())
+            ):
+                assert not sub_missing_params
+                meta_factory_value[param_path] = factory
+                return value_mapping
+
+            # If we have a default, make sure we don't extend missing_params
+            if param.default is None:
+                if sub_missing_params:
+                    missing_params.extend(sub_missing_params)
+                else:
+                    # Happens if we collect no params, like non-chz field or variadics
+                    missing_params.append(param_path)
+            else:
+                # If we have a default, do some validation about wildcards + variadics
+                _check_for_wildcard_matching_variadic_top_level(factory, param, param_path, arg_map)
+
+            return None
+
+        assert not sub_missing_params
+
+    # If we have no subcomponents specified or we have no factory, we don't add any kwargs
+    # When the object is created, this will be equivalent to:
+    # `attr = default` or `attr = default_factory()`
+
+    # If there is no default, we will raise MissingBlueprintArg, instead of relying on the
+    # normal Python error during instantiation. We also rely on raising ExtraneousBlueprintArg
+    # if there are arguments that go unused.
+    # (In the case of Blueprint implementation bugs, if we're missing a param, __init__ will
+    # have our back, but the extraneous logic has no backup)
+    if param.default is None:
+        missing_params.append(param_path)
+
+    return None
+
+
+def _construct_param(
     param: _Param,
     obj_path: str,
     arg_map: ArgumentMap,
@@ -698,7 +964,7 @@ def _construct_arg_for_param(
     used_args: set[tuple[str, int]],
     meta_factory_value: _WriteOnlyMapping[str, Any],
     missing_params: list[str],
-) -> tuple[str, dict[str, Evaluatable]] | None:
+) -> dict[str, Evaluatable] | ConstructionIssue | None:
     # Returns None if we don't need to pass any value. This doesn't mean there's an error,
     # we might simply want the default or default_factory value.
 
@@ -707,85 +973,19 @@ def _construct_arg_for_param(
 
     found_arg = arg_map.get_kv(param_path)
 
-    # If nothing is specified, check if we have a factory we can feed subcomponents to
-    # and if there are specified subcomponents we could feed to it
+    # If nothing is specified, check if we have a factory we can feed subcomponents to and if there
+    # are specified subcomponents we could feed to it. Otherwise, if a default or default_factory
+    # exists, we'll use that.
     if found_arg is None:
-        if (
-            param.meta_factory is not None
-            and (factory := param.meta_factory.unspecified_factory()) is not None
-        ):
-            assert callable(factory)
-            sub_all_params: dict[str, _Param] = {}
-            sub_missing_params: list[str] = []
-            sub_used_args: set[tuple[str, int]] = set()
-            sub_meta_factory_value: dict[str, Any] = {}
-
-            value_mapping = _construct_blueprint(
-                factory,
-                param_path,
-                arg_map,
-                all_params=sub_all_params,
-                used_args=sub_used_args,
-                meta_factory_value=sub_meta_factory_value,
-                missing_params=sub_missing_params,
-            )
-            all_params.update(sub_all_params)
-            used_args.update(sub_used_args)  # TODO: should this be gated by use?
-            meta_factory_value.update(sub_meta_factory_value)
-
-            if not isinstance(value_mapping, ConstructionError):
-                thunk = value_mapping[param_path]
-                assert isinstance(thunk, Thunk)
-                # Only do this if we have subcomponents specified (including wildcards)
-                if thunk.kwargs:
-                    meta_factory_value[param_path] = factory
-                    missing_params.extend(sub_missing_params)
-                    return (param_path, value_mapping)
-
-                # Alternatively, if a) we do not have a default, b) we're making a chz object
-                # c) we know instantiation would always work, that's fine too.
-                # A little special-case-y, but somewhat sane. It turns something that would
-                # error due to lack of default into something reasonable.
-                # See test_nested_all_defaults and variants
-                if (
-                    param.default is None
-                    and hasattr(factory, "__chz_fields__")
-                    and all(p.default is not None for p in sub_all_params.values())
-                ):
-                    assert not sub_missing_params
-                    meta_factory_value[param_path] = factory
-                    return (param_path, value_mapping)
-
-                # If we have a default, make sure we don't extend missing_params
-                if param.default is None:
-                    if sub_missing_params:
-                        missing_params.extend(sub_missing_params)
-                    else:
-                        # Happens if we collect no params, like non-chz field or variadics
-                        missing_params.append(param_path)
-                else:
-                    # If we have a default, do some validation about wildcards + variadics
-                    _check_for_wildcard_matching_variadic_top_level(
-                        factory, param, param_path, arg_map
-                    )
-
-                return None
-
-            assert not sub_missing_params
-
-        # If we have no subcomponents specified or we have no factory, we don't add any kwargs
-        # When the object is created, this will be equivalent to:
-        # `attr = default` or `attr = default_factory()`
-
-        # If there is no default, we will raise MissingBlueprintArg, instead of relying on the
-        # normal Python error during instantiation. We also rely on raising ExtraneousBlueprintArg
-        # if there are arguments that go unused.
-        # (In the case of Blueprint implementation bugs, if we're missing a param, __init__ will
-        # have our back, but the extraneous logic has no backup)
-        if param.default is None:
-            missing_params.append(param_path)
-
-        return None
+        return _construct_unspecified_param(
+            param,
+            param_path=param_path,
+            arg_map=arg_map,
+            all_params=all_params,
+            used_args=used_args,
+            meta_factory_value=meta_factory_value,
+            missing_params=missing_params,
+        )
 
     used_args.add((found_arg.key, found_arg.layer_index))
     spec: object = found_arg.value
@@ -796,8 +996,9 @@ def _construct_arg_for_param(
     # `attr = spec`
     if not isinstance(spec, SpecialArg) and is_subtype_instance(spec, param.type):
         # (ignore SpecialArg's here, in case param.type is object)
-        # TODO: deep copy?
-        return (param_path, {param_path: Value(spec)})
+        if not (param.meta_factory is not None and arg_map.subpaths(param_path, strict=True)):
+            # TODO: deep copy?
+            return {param_path: Value(spec)}
 
     # Otherwise, we see if we can cast it to the expected type:
     # `attr = trycast(spec.value, param.type)`
@@ -808,28 +1009,43 @@ def _construct_arg_for_param(
         if not (param.meta_factory is not None and arg_map.subpaths(param_path, strict=True)):
             try:
                 casted_spec = param.cast(spec.value)
-                return (param_path, {param_path: Value(casted_spec)})
+                return {param_path: Value(casted_spec)}
             except CastError:
                 pass
 
     # ..or if it's a Reference to some other parameter
     if isinstance(spec, Reference):
-        if spec.ref == param_path and param.default is not None:
-            # See test_blueprint_reference_wildcard_default
-            # TODO: this is the only place we instantiate a default
-            default = param.default.instantiate()
-            return (param_path, {param_path: Value(default)})
+        if spec.ref == param_path:
+            # If it's a self reference, treat it as if it were unspecified
+            value_mapping = _construct_unspecified_param(
+                param,
+                param_path=param_path,
+                arg_map=arg_map,
+                all_params=all_params,
+                used_args=used_args,
+                meta_factory_value=meta_factory_value,
+                missing_params=missing_params,
+            )
+            if isinstance(value_mapping, ConstructionIssue):
+                return value_mapping
+            if value_mapping is None and param.default is not None:
+                # See test_blueprint_reference_wildcard_default
+                # TODO: this is the only place we instantiate a default
+                default = param.default.instantiate()
+                return {param_path: Value(default)}
+            return value_mapping
 
-        return (param_path, {param_path: ParamRef(spec.ref)})
+        return {param_path: ParamRef(spec.ref)}
 
     # Otherwise, see if it's something that can construct the expected type. For instance,
     # maybe it's a subclass of param.type, or more generally any `Callable[..., param.type]`,
     # in which case we do:
     # `attr = spec(...)`
+    factory: Callable[..., Any]
     if is_subtype_instance(spec, Callable[..., param.type]):
         assert callable(spec)
         factory = spec
-        value_mapping = _construct_blueprint(
+        value_mapping = _construct_factory(
             factory,
             param_path,
             arg_map,
@@ -838,9 +1054,10 @@ def _construct_arg_for_param(
             meta_factory_value=meta_factory_value,
             missing_params=missing_params,
         )
-        if isinstance(value_mapping, ConstructionError):
-            raise value_mapping
-        return (param_path, value_mapping)
+        if isinstance(value_mapping, ConstructionIssue):
+            return value_mapping
+        meta_factory_value[param_path] = factory
+        return value_mapping
 
     # Otherwise, see if it's something that can be casted into something that can construct
     # the expected type. For instance, maybe it's a string that's the name of a subclass of
@@ -867,7 +1084,7 @@ def _construct_arg_for_param(
                     f"- Failed to interpret it as a factory for polymorphic construction:\n{e}"
                 ) from None
             assert callable(factory)
-            value_mapping = _construct_blueprint(
+            value_mapping = _construct_factory(
                 factory,
                 param_path,
                 arg_map,
@@ -876,10 +1093,10 @@ def _construct_arg_for_param(
                 meta_factory_value=meta_factory_value,
                 missing_params=missing_params,
             )
-            if isinstance(value_mapping, ConstructionError):
-                raise value_mapping
+            if isinstance(value_mapping, ConstructionIssue):
+                return value_mapping
             meta_factory_value[param_path] = factory
-            return (param_path, value_mapping)
+            return value_mapping
 
         # This cast is just to raise the error we caught previously
         try:
@@ -890,12 +1107,11 @@ def _construct_arg_for_param(
             ) from e
         # This next line should be unreachable...
         raise TypeError(
-            f"Expected {param.name!r} to be castable to "
-            f"{type_repr(param.type)}, got {spec.value!r}"
+            f"Expected {param_path!r} to be castable to {type_repr(param.type)}, got {spec.value!r}"
         )
 
     raise TypeError(
-        f"Expected {param.name!r} to be {type_repr(param.type)}, got {type_repr(type(spec))}"
+        f"Expected {param_path!r} to be {type_repr(param.type)}, got {type_repr(type(spec))}"
     )
 
 
@@ -905,7 +1121,7 @@ def _check_for_wildcard_matching_variadic_top_level(
     assert param.default is not None
     if (
         type(param.default.value) is tuple and param.default.value == ()
-    ) or param.default.factory in (tuple, list, dict):
+    ) or param.default.factory in {tuple, list, dict}:
         return
 
     result = _collect_variadic_params(obj, obj_path, arg_map)
@@ -937,14 +1153,14 @@ def _check_for_wildcard_matching_variadic_top_level(
     # See test_variadic_default_wildcard_error
     for element_type in variadic_types:
         subparams = _collect_params(element_type)
-        if isinstance(subparams, ConstructionError):
+        if isinstance(subparams, ConstructionIssue):
             continue
         for subparam in subparams:
             param_path = obj_path + ".__chz_empty_variadic." + subparam.name
             found_arg = arg_map.get_kv(param_path)
             param_path = obj_path + ".(variadic)." + subparam.name
             if found_arg is not None:
-                raise ConstructionError(
+                raise ConstructionException(
                     f"\n\nYou've hit an interesting case.\n\n"
                     f'The parameter "{obj_path}" is variadic ({type_repr(obj)}), but no '
                     "parametrisation was found (either variadic subparameters or a polymorphic "

@@ -1,3 +1,5 @@
+from typing import TypedDict
+
 import pytest
 
 import chz
@@ -93,7 +95,7 @@ def test_munger_combinators():
 
 
 def test_munger_x_type():
-    @chz.chz
+    @chz.chz(typecheck=True)
     class A:
         a: int = chz.field(munger=lambda s, v: int(v + "0") + 1, x_type=str)
 
@@ -105,4 +107,35 @@ def test_munger_x_type():
     assert a.X_a == "456"
     assert a.a == 4561
 
-    # TODO: fix and test interactions with type checking
+    @chz.chz(typecheck=True)
+    class B:
+        b: int = chz.field(munger=lambda s, v: v, x_type=str)
+
+    with pytest.raises(TypeError, match="Expected X_b to be str, got int"):
+        B(b=0)
+
+    B(b="0")  # TODO: this could raise
+
+    @chz.chz(typecheck=True)
+    class C:
+        X_c: int
+
+        @chz.init_property
+        def c(self) -> str:
+            return str(self.X_c)
+
+    assert C(c=0).c == "0"
+
+
+def test_munger_freeze_dict():
+    class MyDict(TypedDict):
+        a: int
+        b: int
+
+    @chz.chz
+    class A:
+        d: dict[str, int] = chz.field(munger=chz.mungers.freeze_dict())
+        d2: MyDict = chz.field(munger=chz.mungers.freeze_dict())
+
+    x = A(d={"a": 1, "b": 2}, d2=MyDict(a=1, b=2))
+    hash(x)

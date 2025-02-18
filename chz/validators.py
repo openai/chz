@@ -48,8 +48,9 @@ def instancecheck(self: Any, attr: str) -> None:
 def typecheck(self: Any, attr: str) -> None:
     """A fancy type check based on the annotated type of the field."""
 
-    # TODO: this needs to work like the mungers to correctly type check the x and final values
-    typ = self.__chz_fields__[attr.removeprefix("X_")].final_type
+    field = self.__chz_fields__[attr.removeprefix("X_")]
+    typ = field.x_type
+
     value = getattr(self, attr)
 
     if not is_subtype_instance(value, typ):
@@ -117,7 +118,10 @@ def const_default(self: Any, attr: str) -> None:
         raise ValueError(f"Expected {attr} to match the default {default!r}, got {value!r}")
 
 
-_decorator_typecheck = for_all_fields(typecheck)
+def _decorator_typecheck(self: Any) -> None:
+    for field in self.__chz_fields__.values():
+        typecheck(self, field.x_name)
+        # TODO: typecheck(self, field.logical_name)
 
 
 def check_field_consistency_in_tree(obj: Any, fields: set[str], regex_root: str = "") -> None:

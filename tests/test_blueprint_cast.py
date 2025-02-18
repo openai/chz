@@ -82,7 +82,7 @@ def test_meta_factory_cast_unspecified():
         cls: int = 0
 
         @classmethod
-        def __chz_cast__(cls, data: str):
+        def __chz_cast__(cls, data: str):  # noqa: ANN206
             return Base(value=int(data))
 
     @chz.chz
@@ -91,7 +91,7 @@ def test_meta_factory_cast_unspecified():
         cls: int = 2
 
         @classmethod
-        def __chz_cast__(cls, data: str):
+        def __chz_cast__(cls, data: str):  # noqa: ANN206
             return DefaultChild(value=int(data))
 
     @chz.chz
@@ -111,7 +111,7 @@ def test_chz_cast_dunder():
         seconds: int
 
         @classmethod
-        def __chz_cast__(cls, value: str):
+        def __chz_cast__(cls, value: str):  # noqa: ANN206
             try:
                 return Duration(int(value.strip("hms")) * {"h": 3600, "m": 60, "s": 1}[value[-1]])
             except Exception as e:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
-from typing import AbstractSet, Any, Callable, Iterator, Mapping
+from typing import AbstractSet, Any, Iterator, Mapping
 
 from chz.blueprint._entrypoint import ExtraneousBlueprintArg
 from chz.blueprint._wildcard import wildcard_key_approx, wildcard_key_to_regex
-from chz.tiepin import type_repr
 
 
 class Layer:
@@ -23,6 +23,8 @@ class Layer:
                 self._to_regex[k] = wildcard_key_to_regex(k)
             else:
                 self.qualified[k] = v
+
+        self.qualified_sorted = sorted(self.qualified.keys())
 
     def get_kv(self, exact_key: str) -> tuple[str, Any] | None:
         if exact_key in self.qualified:
@@ -45,9 +47,6 @@ class Layer:
 
     def __repr__(self) -> str:
         return f"<Layer {self.layer_name} {self.qualified | self.wildcard}>"
-
-    def __hash__(self) -> int:
-        return hash((frozenset(self._params.items()), self.layer_name))
 
 
 @dataclass(frozen=True)
@@ -88,44 +87,48 @@ class ArgumentMap:
         # assert wildcard_literal
         assert path.endswith(wildcard_literal)
 
+        path_plus_dot = path + "."
+
         ret = []
         for layer in self._layers:
-            for key, is_wildcard in layer.iter_keys():
-                if is_wildcard:
-                    # If it's not a wildcard, the logic is straightforward. But doing the equivalent
-                    # for wildcards is tricky!
-                    i = key.rfind(wildcard_literal)
-                    if i == -1:
-                        continue
-                    # The strict case is not complicated
-                    if wildcard_key_to_regex(key).fullmatch(path):
-                        if not strict:
-                            ret.append("")
-                            assert wildcard_key_to_regex(key).fullmatch(path + ret[-1])
-                        continue
-                    # This needs a little thinking about.
-                    # Say path is "foo.bar" and key is "...bar...baz"
-                    # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
-                    # Since it does, we append "...baz"
-                    if (
-                        i + len(wildcard_literal) < len(key)
-                        and key[i + len(wildcard_literal)] == "."
-                        and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
-                    ):
-                        assert i == 0 or key[i - 1] == "."
-                        ret.append(key[i + len(wildcard_literal) + 1 :])
-                        assert wildcard_key_to_regex(key).fullmatch(join_arg_path(path, ret[-1]))
-                else:
-                    if key == path:
-                        if not strict:
-                            ret.append("")
-                            assert key == path + ret[-1]
-                        continue
-                    if not path:
-                        ret.append(key)
-                    elif key.startswith(path + "."):
-                        ret.append(key.removeprefix(path + "."))
-                        assert key == join_arg_path(path, ret[-1])
+            if not strict and path in layer.qualified:
+                ret.append("")
+
+            if not path:
+                ret.extend([k for k in layer.qualified_sorted if k])
+            else:
+                index = bisect.bisect_left(layer.qualified_sorted, path_plus_dot)
+                for i in range(index, len(layer.qualified_sorted)):
+                    key = layer.qualified_sorted[i]
+                    if not key.startswith(path_plus_dot):
+                        break
+                    ret.append(key.removeprefix(path_plus_dot))
+                    assert key == join_arg_path(path, ret[-1])
+
+            for key in layer.wildcard:
+                # If it's not a wildcard, the logic is straightforward. But doing the equivalent
+                # for wildcards is tricky!
+                i = key.rfind(wildcard_literal)
+                if i == -1:
+                    continue
+                # The not strict case is not complicated, we just regex match
+                if layer._to_regex[key].fullmatch(path):
+                    if not strict:
+                        ret.append("")
+                        assert layer._to_regex[key].fullmatch(path + ret[-1])
+                    continue
+                # This needs a little thinking about.
+                # Say path is "foo.bar" and key is "...bar...baz"
+                # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
+                # Since it does, we append "...baz"
+                if (
+                    i + len(wildcard_literal) < len(key)
+                    and key[i + len(wildcard_literal)] == "."
+                    and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
+                ):
+                    assert i == 0 or key[i - 1] == "."
+                    ret.append(key[i + len(wildcard_literal) + 1 :])
+                    assert layer._to_regex[key].fullmatch(join_arg_path(path, ret[-1]))
         return ret
 
     def get_kv(self, exact_key: str) -> _FoundArgument | None:
@@ -140,7 +143,7 @@ class ArgumentMap:
         used_args: set[tuple[str, int]],
         param_paths: AbstractSet[str],
         *,
-        target: Callable[..., Any],
+        entrypoint_repr: str,
     ) -> None:
         for index in range(len(self._layers)):
             layer = self._layers[index]
@@ -194,7 +197,7 @@ class ArgumentMap:
                                 extra += f"\nParam {valid_parent!r} is closest valid ancestor"
 
                     raise ExtraneousBlueprintArg(
-                        f"Extraneous argument {key!r} to Blueprint for {type_repr(target)}"
+                        f"Extraneous argument {key!r} to Blueprint for {entrypoint_repr}"
                         + extra
                         + "\nAppend --help to your command to see valid arguments"
                     )

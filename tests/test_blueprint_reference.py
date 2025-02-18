@@ -1,7 +1,7 @@
 import pytest
 
 import chz
-from chz.blueprint import InvalidBlueprintArg, Reference
+from chz.blueprint import InvalidBlueprintArg, MissingBlueprintArg, Reference
 
 
 def test_blueprint_reference():
@@ -104,6 +104,53 @@ def test_blueprint_reference_wildcard_default():
     assert obj == Main(name="foo", a=A(name="foo"))
 
 
+def test_blueprint_reference_wildcard_default_no_default():
+    @chz.chz
+    class Defaults:
+        a: int
+
+    @chz.chz
+    class A:
+        defaults: Defaults
+        a: int
+
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): defaults.a"
+    ):
+        chz.Blueprint(A).apply_from_argv(["...a@=defaults.a"]).make()
+
+
+def test_blueprint_reference_wildcard_default_constructable():
+    @chz.chz
+    class Object:
+        a: int = 1
+
+    @chz.chz
+    class Defaults:
+        obj: Object
+        a: int = 2
+
+    @chz.chz
+    class Main:
+        defaults: Defaults
+        obj: Object
+        a: int = 3
+
+    assert chz.Blueprint(Main).apply_from_argv(
+        ["...obj@=defaults.obj", "defaults.obj.a=4"]
+    ).make() == Main(
+        defaults=Defaults(obj=Object(a=4), a=2),
+        obj=Object(a=4),
+        a=3,
+    )
+
+    assert chz.Blueprint(Main).apply_from_argv(["...obj@=defaults.obj", "...a=4"]).make() == Main(
+        defaults=Defaults(obj=Object(a=4), a=4),
+        obj=Object(a=4),
+        a=4,
+    )
+
+
 def test_blueprint_reference_cycle():
     @chz.chz
     class Main:
@@ -117,5 +164,7 @@ def test_blueprint_reference_cycle():
     class Main:
         a: int
 
-    with pytest.raises(RecursionError, match="Detected cyclic reference: a -> a"):
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): a"
+    ):
         chz.Blueprint(Main).apply_from_argv(["a@=a"]).make()

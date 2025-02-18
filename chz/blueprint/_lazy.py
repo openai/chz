@@ -87,7 +87,6 @@ def evaluate(value_mapping: dict[str, Evaluatable]) -> Any:
 def check_reference_targets(
     value_mapping: dict[str, Evaluatable], param_paths: AbstractSet[str]
 ) -> None:
-
     invalid_references: dict[str, list[str]] = {}
 
     for param_path, value in value_mapping.items():

@@ -46,3 +46,15 @@ class default_munger(Munger):
     def __call__(self, chzself: Any, field: Field) -> Any:
         value = getattr(chzself, field.x_name)
         return self.fn(chzself, value)
+
+
+class freeze_dict(Munger):
+    """Freezes a dictionary value so the object is hashable."""
+
+    def __call__(self, chzself: Any, field: Field) -> Any:
+        from frozendict import frozendict
+
+        value = getattr(chzself, field.x_name)
+        if isinstance(value, dict):
+            return frozendict(value)  # pyright: ignore[reportUnknownArgumentType]
+        return value

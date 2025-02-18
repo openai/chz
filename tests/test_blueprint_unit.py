@@ -1,6 +1,6 @@
 import pytest
 
-from chz.blueprint import Blueprint, beta_blueprint_to_argv
+from chz.blueprint import Blueprint, Castable, beta_blueprint_to_argv
 from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
 from chz.blueprint._wildcard import _wildcard_key_match, wildcard_key_to_regex
 
@@ -69,7 +69,7 @@ def test_arg_map():
     assert arg_map.get_kv("a.b.c.zero") == None
     assert arg_map.get_kv("a.b.d") == None
 
-    assert arg_map.subpaths("a.b.c") == ["one", "two", ""]
+    assert arg_map.subpaths("a.b.c") == ["", "one", "two"]
     assert arg_map.subpaths("a.b.c", strict=True) == ["one", "two"]
     assert arg_map.subpaths("a.b.c.one") == [""]
     assert arg_map.subpaths("a.b.c.one", strict=True) == []
@@ -79,6 +79,12 @@ def test_arg_map():
 
     assert arg_map.subpaths("prefix") == []
     assert arg_map.subpaths("prefix", strict=True) == []
+
+    layer = Layer({"": 1, "a": 2}, None)
+    arg_map = ArgumentMap([layer])
+
+    assert arg_map.subpaths("") == ["", "a"]
+    assert arg_map.subpaths("", strict=True) == ["a"]
 
     layer_wildcard = Layer({"a...c.one": 1, "a...c.two": 2}, None)
     arg_map = ArgumentMap([layer_wildcard])
@@ -155,6 +161,16 @@ def test_collapse_layers():
     b.apply({"a.b.c.d.f": 9})
     assert set(_collapse_layers(b)) == {("...d", 5), ("a...d", 4), ("...f", 10), ("a.b.c.d.f", 9)}
 
+    b = Blueprint(Dummy)
+    b.apply({"...d": 5, "a.b.c.d": 3, "a...d": 4, "...f": 10, "a.b.c.d.f": 9})
+    assert set(_collapse_layers(b)) == {
+        ("...d", 5),
+        ("a.b.c.d", 3),
+        ("a...d", 4),
+        ("...f", 10),
+        ("a.b.c.d.f", 9),
+    }
+
 
 def test_collapse_blueprint_to_argv():
     class Dummy:
@@ -166,7 +182,14 @@ def test_collapse_blueprint_to_argv():
     b.apply({"a...d": 4})
     b.apply({"...f": 10})
     b.apply({"a.b.c.d.f": 9})
-    assert beta_blueprint_to_argv(b) == ["...d=5", "a...d=4", "...f=10", "a.b.c.d.f=9"]
+    b.apply({"a.b.c.d.f.e": None})
+    assert beta_blueprint_to_argv(b) == [
+        "...d=5",
+        "a...d=4",
+        "...f=10",
+        "a.b.c.d.f=9",
+        "a.b.c.d.f.e=None",
+    ]
 
 
 def test_apply_from_argv():
@@ -193,3 +216,14 @@ def test_apply_with_types():
         "b=chz.blueprint._argv:beta_blueprint_to_argv",
         "c=chz.blueprint._blueprint:Blueprint",
     ]
+
+
+def test_castable_eq():
+    assert Castable("None") == Castable("None")
+    assert Castable("None") == None
+
+    assert Castable("1") == Castable("1")
+    assert Castable("1") == 1
+
+    assert Castable("1") != 2
+    assert Castable("x") != 2

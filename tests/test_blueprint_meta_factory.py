@@ -100,7 +100,7 @@ WARNING: Missing required arguments for parameter(s): field.required2
 Entry point: test_blueprint_meta_factory:test_meta_factory_default_subclass.<locals>.Main
 
 Arguments:
-  field            test_blueprint_meta_factory:test_meta_factory_default_subclass.<locals>.Parent    <class 'test_blueprint_meta_factory.test_meta_factory_default_subclass.<locals>.Child2'>
+  field            test_blueprint_meta_factory:test_meta_factory_default_subclass.<locals>.Parent    test_blueprint_meta_factory:test_meta_factory_default_subclass.<locals>.Child2
   field.required0  int                                       0
   field.required2  int                                       -
 """
@@ -237,6 +237,26 @@ Arguments:
     )
 
 
+def test_meta_factory_blueprint_unspecified_optional():
+    @chz.chz
+    class X:
+        value: int = 0
+
+    @chz.chz
+    class Main:
+        value: int = 0
+        field: X | None = chz.field(blueprint_unspecified=X, default=None)
+
+    assert chz.Blueprint(Main).apply({"...value": 1}).make() == Main(value=1, field=X(value=1))
+
+    @chz.chz
+    class Main:
+        value: int = 0
+        field: X | None = chz.field(blueprint_unspecified=type(None), default=None)
+
+    assert chz.Blueprint(Main).apply({"...value": 1}).make() == Main(value=1, field=None)
+
+
 def test_meta_factory_subclass_generic():
     T = typing.TypeVar("T")
 
@@ -285,7 +305,7 @@ def test_meta_factory_optional():
 
     @chz.chz
     class Parent:
-        child: Optional[Child2]  # noqa: UP007
+        child: Optional[Child2]  # noqa: UP045
 
     @chz.chz
     class Parent2:

@@ -5,7 +5,7 @@ import pytest
 import chz
 from chz.blueprint import (
     Castable,
-    ConstructionError,
+    ConstructionException,
     ExtraneousBlueprintArg,
     InvalidBlueprintArg,
     MissingBlueprintArg,
@@ -118,7 +118,7 @@ def test_variadic_tuple():
 
     with pytest.raises(
         TypeError,
-        match=r"Tuple type tuple\[.*X.*Y.*X\] must take 3 items; arguments for index 9 were specified",
+        match=r"Tuple type tuple\[.*X.*Y.*X\] for 'xs' must take 3 items; arguments for index 9 were specified",
     ):
         chz.Blueprint(MainHeteroTuple).apply({"xs.0.a": 1, "xs.9.b": "str"}).make()
 
@@ -200,7 +200,7 @@ def test_variadic_typed_dict():
     ):
         chz.Blueprint(Main).apply({"foo.bar": 3, "foo.typo": "baz"}).make()
 
-    with pytest.raises(TypeError, match=r"Expected 'bar' to be int, got str"):
+    with pytest.raises(TypeError, match=r"Expected 'foo.bar' to be int, got str"):
         chz.Blueprint(Main).apply({"foo.bar": "bar", "foo.baz": "baz"}).make()
 
     with pytest.raises(
@@ -293,7 +293,7 @@ def test_variadic_typed_dict_not_required():
     ):
         chz.Blueprint(Main).make()
 
-    print((chz.Blueprint(Main).get_help()))
+    print(chz.Blueprint(Main).get_help())
     assert (
         chz.Blueprint(Main).get_help()
         == """WARNING: Missing required arguments for parameter(s): foo.a, foo.b, bar.a, bar.b, bar.e, baz.a, baz.b, baz.e, baz.g, baz.h
@@ -351,7 +351,7 @@ def test_variadic_default_wildcard_error():
         a: int  # same name as X.a, to prevent unused wildcard error
 
     with pytest.raises(
-        ConstructionError,
+        ConstructionException,
         match=(
             r'The parameter "xs" is variadic(.|\n)*'
             r'However, you also specified the wildcard "\.\.\.a" and you may '
@@ -398,7 +398,7 @@ def test_variadic_default_wildcard_error_using_types_from_default():
         clauses: tuple[Clause, ...] = (FalseClause(), FalseClause())
 
     with pytest.raises(
-        ConstructionError,
+        ConstructionException,
         match=(
             r'The parameter "clauses.1.clauses" is variadic(.|\n)*'
             r'However, you also specified the wildcard "\.\.\.val" and you may '

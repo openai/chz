@@ -29,6 +29,9 @@ class InvalidBlueprintArg(EntrypointException): ...
 class MissingBlueprintArg(EntrypointException): ...
 
 
+class ConstructionException(EntrypointException): ...
+
+
 def exit_on_entrypoint_error(fn: _F) -> _F:
     @functools.wraps(fn)
     def inner(*args, **kwargs):
