@@ -751,6 +751,20 @@ def test_is_subtype_instance_literal_string():
     assert not is_subtype_instance(1, typing.LiteralString)
 
 
+def test_is_subtype_instance_explicit_protocol_lsp_violation():
+    class P(typing.Protocol):
+        def makes_int(self) -> int: ...
+
+    class Implicit:
+        def makes_int(self) -> str: ...
+
+    class Explicit(P):
+        def makes_int(self) -> str: ...
+
+    assert not is_subtype_instance(Implicit(), P)
+    assert is_subtype_instance(Explicit(), P)
+
+
 def test_is_subtype_instance_pydantic() -> None:
     import pydantic
 
@@ -995,6 +1009,32 @@ def test_try_cast_dict():
         _simplistic_try_cast("{1: '2'}", dict[str, str])
     with pytest.raises(CastError, match=r"Could not cast '\{str: str\}' to dict"):
         _simplistic_try_cast("{str: str}", dict)
+
+
+def test_try_cast_callable():
+    assert (
+        _simplistic_try_cast(
+            "chz.tiepin:_simplistic_try_cast", typing.Callable[[str, typing.Any], typing.Any]
+        )
+        is _simplistic_try_cast
+    )
+
+    assert (
+        _simplistic_try_cast("chz.tiepin:_simplistic_try_cast", typing.Callable[..., typing.Any])
+        is _simplistic_try_cast
+    )
+
+    with pytest.raises(
+        CastError,
+        match=r"Could not cast 'chz.tiepin:_simplistic_try_cast' to Callable\[\[int\], int\]",
+    ):
+        _simplistic_try_cast("chz.tiepin:_simplistic_try_cast", typing.Callable[[int], int])
+
+    with pytest.raises(
+        CastError,
+        match=r"Could not cast 'does_not_exist:penguin' to Callable\[\[int\], int\]\. Could not import module.*ModuleNotFoundError",
+    ):
+        _simplistic_try_cast("does_not_exist:penguin", typing.Callable[[int], int])
 
 
 def test_try_cast_tuple_unpack():

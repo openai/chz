@@ -209,6 +209,6 @@ class ArgumentMap:
 def join_arg_path(parent: str, child: str) -> str:
     if not parent:
         return child
-    if child.startswith("."):
+    if child.startswith(".") or child == "":
         return parent + child
     return parent + "." + child

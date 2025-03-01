@@ -54,7 +54,7 @@ def field(
 
         blueprint_unspecified:
             Used to construct the meta_factory, if meta_factory is unspecified. This is the
-            default callable we can attempt to call to get a value of the expected type.
+            default callable `Blueprint` may attempt to call to get a value of the expected type.
             See the documentation in chz.factories for more information.
 
             In particular, the following two are equivalent:
@@ -75,9 +75,10 @@ def field(
         repr: Whether to include the field in the `__repr__` of the class. This can also be a
             callable to customise the repr of the field.
 
-        doc: The docstring for the field.
+        doc: The docstring for the field. Used in `--help`.
 
-        metadata: Arbitrary metadata to attach to the field.
+        metadata: Arbitrary user-defined metadata to attach to the field.
+            Useful when extending `chz`.
     """
     return Field(
         name="",

@@ -3,6 +3,7 @@ import collections
 import functools
 import importlib
 import re
+import sys
 import types
 import typing
 from typing import Any, Callable
@@ -71,6 +72,9 @@ class MetaFactory:
 
 class subclass(MetaFactory):
     """
+    ATTN: this is soft deprecated, since `chz.factories.standard` is powerful enough to effectively
+    do a superset of this.
+
     Read the docstring for MetaFactory first.
 
     ```
@@ -157,6 +161,9 @@ class function(MetaFactory):
         default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
     ) -> None:
         """
+        ATTN: this is soft deprecated, since `chz.factories.standard` is powerful enough to effectively
+        do a superset of this.
+
         Read the docstring for `MetaFactory` and `subclass` first.
 
         If you specify `function` as your meta_factory, any function can serve as a factory to
@@ -251,7 +258,9 @@ def _module_from_name(name: str) -> types.ModuleType:
     try:
         return importlib.import_module(name)
     except ImportError as e:
-        raise MetaFromString(f"Could not import module {name!r} ({type(e).__name__}: {e}") from None
+        raise MetaFromString(
+            f"Could not import module {name!r} ({type(e).__name__}: {e})"
+        ) from None
 
 
 def _module_getattr(mod: types.ModuleType, attr: str) -> Any:
@@ -278,6 +287,7 @@ def _find_subclass(spec: str, superclass: TypeForm):
 
     if module_name is None and not base.isidentifier():
         if "." in base:
+            # This effectively adds some basic support for module.symbol, not just module:symbol
             module_name, base = base.rsplit(".", 1)
         if not base.isidentifier():
             raise MetaFromString(
@@ -287,20 +297,19 @@ def _find_subclass(spec: str, superclass: TypeForm):
     if module_name is not None:
         module = _module_from_name(module_name)
         # TODO: think about this type ignore
-        return _maybe_generic(
+        value = _maybe_generic(
             _module_getattr(module, base),
             generic,
             template=superclass,  # type: ignore[arg-type]
         )
-
-    visited_subclasses = set()
-    base_class_origin = getattr(superclass, "__origin__", superclass)
-
-    if not is_instantiable_type(base_class_origin):
+        if is_subtype(value, superclass):
+            return value
         raise MetaFromString(
-            f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
+            f"Expected a subtype of {type_repr(superclass)}, got {type_repr(value)}"
         )
-    if base_class_origin in {object, typing.Any, typing_extensions.Any}:
+
+    superclass_class_origin = getattr(superclass, "__origin__", superclass)
+    if superclass_class_origin in {object, typing.Any, typing_extensions.Any}:
         try:
             return _maybe_generic(
                 _module_getattr(_module_from_name("__main__"), base),
@@ -311,10 +320,13 @@ def _find_subclass(spec: str, superclass: TypeForm):
             raise MetaFromString(
                 f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
             ) from None
+    if not is_instantiable_type(superclass_class_origin):
+        raise MetaFromString(f"Could not find subclasses of {type_repr(superclass)}")
 
-    assert base_class_origin is not type
+    assert superclass_class_origin is not type
 
-    all_subclasses = collections.deque(base_class_origin.__subclasses__())
+    visited_subclasses = set()
+    all_subclasses = collections.deque(superclass_class_origin.__subclasses__())
     all_subclasses.appendleft(superclass)
     while all_subclasses:
         cls = all_subclasses.popleft()
@@ -371,8 +383,15 @@ def _return_prospective(obj: Any, annotation: TypeForm, factory: str) -> Any:
     if not callable(obj):
         raise MetaFromString(f"Expected {obj} from {factory!r} to be callable")
     if isinstance(obj, type) and not is_subtype(obj, annotation):
+        extra = ""
+        if getattr(annotation, "__module__", None) == "__main__":
+            if any(
+                hasattr(sys.modules["__main__"], (witness := parent).__name__)
+                for parent in obj.__mro__
+            ):
+                extra = f" (there may be confusion between {type_repr(witness)} and __main__:{witness.__name__})"
         raise MetaFromString(
-            f"Expected {type_repr(obj)} from {factory!r} to be a subtype of {type_repr(annotation)}"
+            f"Expected {type_repr(obj)} from {factory!r} to be a subtype of {type_repr(annotation)}{extra}"
         )
     return obj
 

@@ -11,7 +11,6 @@ Some non-exhaustive reasons why chz's feature set isn't built on top of dataclas
 - Clearer handling of type annotation evaluation and scopes
 - chz needs keyword-only arguments for various reasons (dataclasses acquired this only later)
 - Cool data model tricks like munging and init_property
-- Automatically calculated versions
 - Many small things
 
 """

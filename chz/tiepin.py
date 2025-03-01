@@ -22,6 +22,7 @@ import ast
 import collections.abc
 import functools
 import hashlib
+import importlib
 import inspect
 import operator
 import sys
@@ -184,6 +185,22 @@ def is_typed_dict(t: TypeForm) -> bool:
 
 class CastError(Exception):
     pass
+
+
+def _module_from_name(name: str) -> types.ModuleType:
+    try:
+        return importlib.import_module(name)
+    except ImportError as e:
+        raise CastError(f"Could not import module {name!r} ({type(e).__name__}: {e})") from None
+
+
+def _module_getattr(mod: types.ModuleType, attr: str) -> typing.Any:
+    try:
+        for a in attr.split("."):
+            mod = getattr(mod, a)
+        return mod
+    except AttributeError:
+        raise CastError(f"No attribute named {attr!r} in module {mod.__name__}") from None
 
 
 def _sort_for_union_preference(typs: tuple[TypeForm, ...]):
@@ -406,6 +423,28 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
             if is_subtype_instance(value, typ):
                 return value
         raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
+
+    if origin is collections.abc.Callable:
+        # TODO: also support type, callback protocols
+        # TODO: unify with factories.from_string
+        # TODO: needs module context
+        if ":" in inst_str:
+            try:
+                module_name, var = inst_str.split(":", 1)
+                module = _module_from_name(module_name)
+                value = _module_getattr(module, var)
+                if not is_subtype_instance(value, typ):
+                    raise CastError(f"{type_repr(value)} is not a subtype of {type_repr(typ)}")
+            except CastError as e:
+                raise CastError(
+                    f"Could not cast {repr(inst_str)} to {type_repr(typ)}. {e}"
+                ) from None
+
+            return value
+        else:
+            raise CastError(
+                f"Could not cast {repr(inst_str)} to {type_repr(typ)}. Try using a fully qualified name, e.g. module_name:{inst_str}"
+            )
 
     if "torch" in sys.modules:
         import torch
@@ -770,6 +809,8 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
     if typing_extensions.is_protocol(origin):
         if getattr(origin, "_is_runtime_protocol", False):
             return isinstance(inst, origin)
+        if origin in type(inst).__mro__:
+            return True
         annotations = typing_extensions.get_type_hints(origin)
         for attr in sorted(typing_extensions.get_protocol_members(origin)):
             if not hasattr(inst, attr):
