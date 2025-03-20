@@ -1,7 +1,13 @@
 import pytest
 
 import chz
-from chz.blueprint import Castable, ExtraneousBlueprintArg, InvalidBlueprintArg, MissingBlueprintArg
+from chz.blueprint import (
+    Castable,
+    ConstructionException,
+    ExtraneousBlueprintArg,
+    InvalidBlueprintArg,
+    MissingBlueprintArg,
+)
 
 
 def test_entrypoint():
@@ -573,6 +579,23 @@ No subclass of test_blueprint:test_blueprint_castable_but_subpaths.<locals>.A na
         chz.Blueprint(Main).apply({"a": Castable("works"), "a.field": Castable("field")}).make()
 
 
+def test_blueprint_value_but_subpaths():
+    @chz.chz
+    class A:
+        field: int
+
+    @chz.chz
+    class Main:
+        a: A | None
+
+    with pytest.raises(
+        InvalidBlueprintArg,
+        match=r"Could not interpret None provided for param 'a' as a value, "
+        r"since subparameters were provided \(e.g. 'a.field'\)",
+    ):
+        chz.Blueprint(Main).apply({"a": None, "a.field": Castable("field")}).make()
+
+
 def test_blueprint_apply_subpath():
     @chz.chz
     class A:
@@ -691,3 +714,64 @@ def test_blueprint_unspecified_functools_partial():
         MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): a.missing"
     ):
         chz.Blueprint(Main).make()
+
+
+def test_blueprint_positional_only():
+    def pos_only(a: int = 42, /):
+        return a
+
+    assert chz.entrypoint(pos_only, argv=[]) == 42
+
+    def pos_only_no_default(a: int, /):
+        return a
+
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): 0"
+    ):
+        chz.entrypoint(pos_only_no_default, argv=[])
+
+    assert chz.entrypoint(pos_only_no_default, argv=["0=1"]) == 1
+
+
+def test_blueprint_args_kwargs():
+    def args_only(*args: int):
+        return args
+
+    assert chz.entrypoint(args_only, argv=[]) == ()
+    assert chz.entrypoint(args_only, argv=["0=1", "1=2"]) == (1, 2)
+
+    def kwargs_only(**kwargs: int):
+        return kwargs
+
+    assert chz.entrypoint(kwargs_only, argv=[]) == {}
+    assert chz.entrypoint(kwargs_only, argv=["a=1", "b=2"]) == {"a": 1, "b": 2}
+
+    def pos_only_args_kwargs(x: int, /, *args: int, **kwargs: int):
+        return x, args, kwargs
+
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): 0"
+    ):
+        chz.entrypoint(pos_only_args_kwargs, argv=[])
+
+    assert chz.entrypoint(pos_only_args_kwargs, argv=["0=1", "1=2"]) == (1, (2,), {})
+    assert chz.entrypoint(pos_only_args_kwargs, argv=["0=1", "1=2", "a=3", "b=4"]) == (
+        1,
+        (2,),
+        {"a": 3, "b": 4},
+    )
+
+    def poskw_args_kwargs(x: int, *args: int, **kwargs: int):
+        return x, args, kwargs
+
+    with pytest.raises(
+        MissingBlueprintArg, match=r"Missing required arguments for parameter\(s\): x"
+    ):
+        chz.entrypoint(poskw_args_kwargs, argv=[])
+    with pytest.raises(
+        ConstructionException,
+        match=r"both positional-or-keyword and variadic positional parameters",
+    ):
+        chz.entrypoint(poskw_args_kwargs, argv=["x=1", "0=2"])
+
+    assert chz.entrypoint(poskw_args_kwargs, argv=["x=1"]) == (1, (), {})

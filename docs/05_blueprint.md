@@ -38,7 +38,7 @@ values to fields, you can also assign the return values of a call to fields:
 If `chz` sees `field=value`, this is similar to `X(field=value)`. But if `chz` sees
 `field=value field.a=1 field.b=2`, this is similar to `X(field=value(a=1, b=2))`.
 
-For a full explanation of the Blueprint algorithm, see [05_blueprint.md#blueprint-algorithm].
+For a full explanation of the Blueprint algorithm, see [Blueprint Algorithm](#blueprint-algorithm).
 
 ### Discovery and interpretation of valid polymorphic values
 

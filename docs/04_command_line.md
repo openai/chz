@@ -334,7 +334,9 @@ chz.entrypoint(object)
 
 This script probably isn't actually directly useful, but just to show you the power of `chz`, it
 will let you call most functions or create most objects.
-Try `python script.py '=calendar:Calendar' --help`.
+Try:
+- `python -m chz.universal '=print' '0=hello' '1=lambda name: name + "!"' '1.name=world'`
+- `python -m chz.universal '=calendar:Calendar' --help`
 See e.g. `test_root_polymorphism` for how you might actually want to use this.
 
 ### [Next section — Blueprints](./05_blueprint.md)

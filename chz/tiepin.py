@@ -561,6 +561,20 @@ def is_subtype(left: TypeForm, right: TypeForm) -> bool:
     if left_origin is typing.Literal or left_origin is typing_extensions.Literal:
         return all(is_subtype_instance(left_arg, right) for left_arg in left_args)
 
+    if isinstance(left_origin, typing.TypeVar):
+        if left_origin == right_origin:
+            return True
+        bound = left_origin.__bound__
+        if bound is None:
+            bound = object
+        if is_subtype(bound, right_origin):
+            return True
+        if left_origin.__constraints__:
+            return any(
+                is_subtype(left_arg, right_origin) for left_arg in left_origin.__constraints__
+            )
+        return False
+
     if typing_extensions.is_protocol(left) and typing_extensions.is_protocol(right):
         left_attrs = typing_extensions.get_protocol_members(left)
         right_attrs = typing_extensions.get_protocol_members(right)

@@ -99,6 +99,9 @@ def nested_entrypoint(
     if __name__ == "__main__":
         chz.nested_entrypoint(main)
     ```
+
+    Tip: If your `main` function is `async`, you can just do
+    `asyncio.run(chz.nested_entrypoint(main))`.
     """
     # This function should be easily forkable, so do not make it more complicated
     target = get_nested_target(main)

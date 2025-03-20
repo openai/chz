@@ -268,8 +268,8 @@ def _module_getattr(mod: types.ModuleType, attr: str) -> Any:
         for a in attr.split("."):
             mod = getattr(mod, a)
         return mod
-    except AttributeError:
-        raise MetaFromString(f"No attribute named {attr!r} in module {mod.__name__}") from None
+    except AttributeError as e:
+        raise MetaFromString(str(e)) from None
 
 
 def _find_subclass(spec: str, superclass: TypeForm):
@@ -317,9 +317,18 @@ def _find_subclass(spec: str, superclass: TypeForm):
                 template=superclass,  # type: ignore[arg-type]
             )
         except MetaFromString:
-            raise MetaFromString(
-                f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
-            ) from None
+            pass
+        try:
+            return _maybe_generic(
+                _module_getattr(_module_from_name("builtins"), base),
+                generic,
+                template=superclass,  # type: ignore[arg-type]
+            )
+        except MetaFromString:
+            pass
+        raise MetaFromString(
+            f"Could not find {spec!r}, try a fully qualified name e.g. module_name:{spec}"
+        ) from None
     if not is_instantiable_type(superclass_class_origin):
         raise MetaFromString(f"Could not find subclasses of {type_repr(superclass)}")
 

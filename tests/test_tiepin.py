@@ -908,6 +908,22 @@ def test_is_subtype_protocol():
     assert not is_subtype_instance(a, typing.Callable[..., P2])
 
 
+def test_is_subtype_typevar() -> None:
+    T_int = typing.TypeVar("T_int", bound=int)
+    assert is_subtype(T_int, int)
+    assert is_subtype(T_int, object)
+    assert not is_subtype(T_int, str)
+
+    T = typing.TypeVar("T")
+    assert is_subtype(T, object)
+    assert not is_subtype(T, str)
+
+    T_constrained = typing.TypeVar("T_constrained", int, str)
+    assert is_subtype(T_constrained, int | str)
+    assert is_subtype(T_constrained, object)
+    assert not is_subtype(T_constrained, bytes)
+
+
 def test_no_return():
     assert is_subtype_instance(typing.NoReturn, int)
     assert is_subtype_instance(typing.NoReturn, str)

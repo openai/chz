@@ -4,40 +4,6 @@ import chz
 from chz.blueprint import ConstructionException, ExtraneousBlueprintArg
 
 
-def test_target_positional_only():
-    def good(a: int = 42, /):
-        return a
-
-    assert chz.entrypoint(good, argv=[]) == 42
-
-    def bad(a: int, /):
-        return a
-
-    with pytest.raises(
-        ConstructionException,
-        match="Cannot construct bad because it has positional-only parameter a without a default",
-    ):
-        chz.entrypoint(bad, argv=[])
-
-
-def test_target_args_kwargs():
-    def bad1(*args): ...
-
-    with pytest.raises(
-        ConstructionException,
-        match=r"Cannot collect parameters from bad1 due to \*args parameter args",
-    ):
-        chz.entrypoint(bad1, argv=[])
-
-    def bad2(**kwargs): ...
-
-    with pytest.raises(
-        ConstructionException,
-        match=r"Cannot collect parameters from bad2 due to \*\*kwargs parameter kwargs",
-    ):
-        chz.entrypoint(bad2, argv=[])
-
-
 def test_target_bad_signature():
     def bad(a: int, b: str): ...
 

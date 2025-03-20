@@ -4,6 +4,10 @@
 
 `chz` helps you manage configuration, particularly from the command line.
 
+`chz` is available on [PyPI](https://pypi.org/project/chz/).
+
+To click the links below, please visit [Github](https://github.com/openai/chz).
+
 Overview:
 - [Quickstart](docs/01_quickstart.md)
 - [Declarative object model](docs/02_object_model.md)
