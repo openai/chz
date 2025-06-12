@@ -17,6 +17,7 @@ from .data_model import (
     init_property,
     is_chz,
     replace,
+    traverse,
 )
 from .field import field
 from .validators import validate
@@ -35,6 +36,7 @@ __all__ = [
     "nested_entrypoint",
     "replace",
     "beta_to_blueprint_values",
+    "traverse",
     "validate",
     "validators",
     "mungers",

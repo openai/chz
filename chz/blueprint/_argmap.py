@@ -84,7 +84,7 @@ class ArgumentMap:
         assert not path.endswith(".")
 
         wildcard_literal = path.split(".")[-1]
-        # assert wildcard_literal
+        # note path may be the empty string
         assert path.endswith(wildcard_literal)
 
         path_plus_dot = path + "."
@@ -96,14 +96,16 @@ class ArgumentMap:
 
             if not path:
                 ret.extend([k for k in layer.qualified_sorted if k])
-            else:
-                index = bisect.bisect_left(layer.qualified_sorted, path_plus_dot)
-                for i in range(index, len(layer.qualified_sorted)):
-                    key = layer.qualified_sorted[i]
-                    if not key.startswith(path_plus_dot):
-                        break
-                    ret.append(key.removeprefix(path_plus_dot))
-                    assert key == join_arg_path(path, ret[-1])
+                ret.extend(layer.wildcard)
+                continue
+
+            index = bisect.bisect_left(layer.qualified_sorted, path_plus_dot)
+            for i in range(index, len(layer.qualified_sorted)):
+                key = layer.qualified_sorted[i]
+                if not key.startswith(path_plus_dot):
+                    break
+                ret.append(key.removeprefix(path_plus_dot))
+                assert key == join_arg_path(path, ret[-1])
 
             for key in layer.wildcard:
                 # If it's not a wildcard, the logic is straightforward. But doing the equivalent
@@ -121,14 +123,23 @@ class ArgumentMap:
                 # Say path is "foo.bar" and key is "...bar...baz"
                 # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
                 # Since it does, we append "...baz"
-                if (
-                    i + len(wildcard_literal) < len(key)
-                    and key[i + len(wildcard_literal)] == "."
-                    and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
-                ):
-                    assert i == 0 or key[i - 1] == "."
-                    ret.append(key[i + len(wildcard_literal) + 1 :])
-                    assert layer._to_regex[key].fullmatch(join_arg_path(path, ret[-1]))
+                while i != -1:
+                    if (
+                        i + len(wildcard_literal) < len(key)
+                        and key[i + len(wildcard_literal)] == "."
+                        and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
+                    ):
+                        assert i == 0 or key[i - 1] == "."
+
+                        suffix = key[i + len(wildcard_literal) :]
+                        if not suffix.startswith("..."):
+                            suffix = suffix.removeprefix(".")
+                        ret.append(suffix)
+                        assert layer._to_regex[key].fullmatch(join_arg_path(path, ret[-1]))
+                        break
+                    i_next = key.rfind(wildcard_literal, 0, i)
+                    assert i_next < i, "Infinite loop"
+                    i = i_next
         return ret
 
     def get_kv(self, exact_key: str) -> _FoundArgument | None:

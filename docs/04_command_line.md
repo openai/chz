@@ -230,7 +230,7 @@ Variadic parameters can also be polymorphic, for instance, you could do:
 ```python
 # evals.0=EvalSubclass evals.0.name=foo evals.1.name=bar
 # becomes:
-# Experiment(evals=[EvalSubclass(name="foo"), EvalSubclass(name="bar")])
+# Experiment(evals=[EvalSubclass(name="foo"), Eval(name="bar")])
 ```
 
 ## `Blueprint`s, briefly

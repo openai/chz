@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Any, Callable, TypedDict, TypeVar
 
 import pytest
 
@@ -136,6 +136,75 @@ def test_munger_freeze_dict():
     class A:
         d: dict[str, int] = chz.field(munger=chz.mungers.freeze_dict())
         d2: MyDict = chz.field(munger=chz.mungers.freeze_dict())
+
+    x = A(d={"a": 1, "b": 2}, d2=MyDict(a=1, b=2))
+    hash(x)
+
+
+def test_converter():
+    @chz.chz
+    class A:
+        a: int = chz.field(converter=if_none(lambda self: self.c))
+        c: int = 42
+
+    a = A(a=None)
+    assert a.a == 42
+    b = A(a=3)
+    assert b.a == 3
+
+
+def test_converter_and_munger():
+    with pytest.raises(ValueError, match="Cannot specify both converter and munger"):
+
+        @chz.chz
+        class A:
+            a: int = chz.field(
+                converter=if_none(lambda self: self.c), munger=if_none(lambda self: self.c)
+            )
+            c: int = 42
+
+
+def test_converter_fn():
+    @chz.chz
+    class A:
+        a: int = chz.field(converter=lambda v, **kwargs: v or 10)
+        c: int = 42
+
+    a = A(a=None)
+    assert a.a == 10
+
+
+_T = TypeVar("_T")
+
+
+def if_none_fn(default: _T) -> Callable[[_T | None], _T]:
+    def convert(value: _T | None, *, chzself: Any = None) -> _T:
+        return value or default
+
+    return convert
+
+
+def test_converter_fn_typed():
+    @chz.chz
+    class A:
+        a: int = chz.field(converter=if_none_fn(10))
+        c: int = 42
+
+    a = A(a=None)
+    assert a.a == 10
+
+
+def test_converter_freeze_dict():
+    from frozendict import frozendict
+
+    class MyDict(TypedDict):
+        a: int
+        b: int
+
+    @chz.chz
+    class A:
+        d: frozendict[str, int] = chz.field(converter=chz.mungers.freeze_dict())
+        d2: MyDict = chz.field(converter=chz.mungers.freeze_dict())  # type: ignore
 
     x = A(d={"a": 1, "b": 2}, d2=MyDict(a=1, b=2))
     hash(x)

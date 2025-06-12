@@ -1,4 +1,5 @@
 from chz.blueprint._argv import argv_to_blueprint_args as argv_to_blueprint_args
+from chz.blueprint._argv import beta_argv_arg_to_string as beta_argv_arg_to_string
 from chz.blueprint._argv import beta_blueprint_to_argv as beta_blueprint_to_argv
 from chz.blueprint._blueprint import Blueprint as Blueprint
 from chz.blueprint._blueprint import Castable as Castable

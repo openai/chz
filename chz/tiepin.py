@@ -324,6 +324,18 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
             return None
         return inst_str
 
+    if isinstance(origin, typing.TypeVar):
+        if origin.__constraints__:
+            for constraint in origin.__constraints__:
+                try:
+                    return _simplistic_try_cast(inst_str, constraint)
+                except CastError:
+                    pass
+            raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
+        if origin.__bound__:
+            return _simplistic_try_cast(inst_str, origin.__bound__)
+        return _simplistic_try_cast(inst_str, object)
+
     if origin is typing.Literal or origin is typing_extensions.Literal:
         values_by_type = {}
         for arg in getattr(typ, "__args__", ()):
@@ -574,6 +586,15 @@ def is_subtype(left: TypeForm, right: TypeForm) -> bool:
                 is_subtype(left_arg, right_origin) for left_arg in left_origin.__constraints__
             )
         return False
+
+    if isinstance(right_origin, typing.TypeVar):
+        if right_origin.__constraints__:
+            return any(
+                is_subtype(left_origin, constraint) for constraint in right_origin.__constraints__
+            )
+        if right_origin.__bound__:
+            return is_subtype(left_origin, right_origin.__bound__)
+        return True
 
     if typing_extensions.is_protocol(left) and typing_extensions.is_protocol(right):
         left_attrs = typing_extensions.get_protocol_members(left)
@@ -970,7 +991,7 @@ def simplified_union(types):
     union_types = []
     for typ in types:
         if getattr(typ, "__args__", None) is None and any(
-            issubclass(typ, member) for member in union_types
+            is_subtype(typ, member) for member in union_types
         ):
             continue
         union_types.append(typ)
@@ -979,7 +1000,7 @@ def simplified_union(types):
     union_types = []
     for typ in reversed(types):
         if getattr(typ, "__args__", None) is None and any(
-            issubclass(typ, member) for member in union_types
+            is_subtype(typ, member) for member in union_types
         ):
             continue
         union_types.append(typ)

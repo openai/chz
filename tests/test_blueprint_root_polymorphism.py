@@ -23,6 +23,7 @@ def test_root_polymorphism():
     assert chz.Blueprint(X).apply({"": foo, "a": 2}).make() == Y(a=2, b="default", c=3.0)
 
     assert chz.Blueprint(object).apply({"": X, "a": 1}).make() == X(a=1, b="str")
+    assert chz.Blueprint(object).apply({"": X, "...a": 1}).make() == X(a=1, b="str")
     assert chz.Blueprint(object).apply({"": foo, "a": 1}).make() == Y(a=1, b="default", c=3.0)
 
     # TODO: make help better if root is object or Any and no arguments are provided

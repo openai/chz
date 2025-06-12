@@ -1,8 +1,37 @@
 import pytest
 
-from chz.blueprint import Blueprint, Castable, beta_blueprint_to_argv
+from chz.blueprint import Blueprint, Castable, beta_argv_arg_to_string, beta_blueprint_to_argv
 from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
 from chz.blueprint._wildcard import _wildcard_key_match, wildcard_key_to_regex
+
+
+def test_beta_argv_arg_to_string():
+    k = "a"
+    v = {
+        "b": {
+            "c": {
+                "d": 1,
+            },
+            "e": 2,
+        },
+        "f": 3,
+    }
+    assert beta_argv_arg_to_string(k, v) == ["a.b.c.d=1", "a.b.e=2", "a.f=3"]
+
+    class C:
+        d: int
+
+    class B:
+        c: C
+        e: int
+
+    class A:
+        b: B
+        f: int
+
+    blueprint = Blueprint(A)
+    blueprint.apply({"a.b": {"c": {"d": 1}, "e": 2}, "a.f": 3})
+    assert beta_blueprint_to_argv(blueprint) == ["a.b.c.d=1", "a.b.e=2", "a.f=3"]
 
 
 def test_wildcard_key_to_regex():
@@ -86,6 +115,8 @@ def test_arg_map():
     assert arg_map.subpaths("") == ["", "a"]
     assert arg_map.subpaths("", strict=True) == ["a"]
 
+
+def test_arg_map_wildcard():
     layer_wildcard = Layer({"a...c.one": 1, "a...c.two": 2}, None)
     arg_map = ArgumentMap([layer_wildcard])
 
@@ -106,13 +137,19 @@ def test_arg_map():
     layer_wildcard = Layer({"a...one...b...one": 1}, None)
     arg_map = ArgumentMap([layer_wildcard])
 
-    assert arg_map.subpaths("a.one.x.one") == []
+    assert arg_map.subpaths("a.one.x.one") == ["...b...one"]
 
     layer_wildcard = Layer({"...prefix_suffix": 1}, None)
     arg_map = ArgumentMap([layer_wildcard])
 
     assert arg_map.subpaths("something.prefix") == []
     assert arg_map.subpaths("something.prefix", strict=True) == []
+
+    layer_wildcard = Layer({"...a.key.key": 1, "...a.key.key...x": 2}, None)
+    arg_map = ArgumentMap([layer_wildcard])
+
+    assert arg_map.subpaths("a.key") == ["key...x", "key"]
+    assert arg_map.subpaths("") == ["...a.key.key...x", "...a.key.key"]
 
 
 def test_layer():

@@ -914,14 +914,26 @@ def test_is_subtype_typevar() -> None:
     assert is_subtype(T_int, object)
     assert not is_subtype(T_int, str)
 
+    assert is_subtype(int, T_int)
+    assert not is_subtype(str, T_int)
+
     T = typing.TypeVar("T")
     assert is_subtype(T, object)
     assert not is_subtype(T, str)
+
+    assert is_subtype(T, T)
+    assert is_subtype(object, T)
+    assert is_subtype(str, T)
 
     T_constrained = typing.TypeVar("T_constrained", int, str)
     assert is_subtype(T_constrained, int | str)
     assert is_subtype(T_constrained, object)
     assert not is_subtype(T_constrained, bytes)
+
+    assert is_subtype(T_constrained, T_constrained)
+    assert is_subtype(int, T_constrained)
+    assert is_subtype(str, T_constrained)
+    assert not is_subtype(object, T_constrained)
 
 
 def test_no_return():
@@ -1124,6 +1136,19 @@ def test_try_cast_fractions():
 
 def test_try_cast_pathlib():
     assert _simplistic_try_cast("foo", pathlib.Path) == pathlib.Path("foo")
+
+
+def test_try_cast_typevar():
+    assert _simplistic_try_cast("foo", typing.TypeVar("T")) == "foo"
+    assert _simplistic_try_cast("foo", typing.TypeVar("T", int, str)) == "foo"
+    assert _simplistic_try_cast("5", typing.TypeVar("T", bound=int)) == 5
+    assert _simplistic_try_cast("5", typing.TypeVar("T", bound=str | int)) == 5
+
+    with pytest.raises(CastError, match="Could not cast 'foo' to ~T"):
+        assert _simplistic_try_cast("foo", typing.TypeVar("T", int, float)) == "foo"
+
+    with pytest.raises(CastError, match="Could not cast 'five' to int"):
+        assert _simplistic_try_cast("five", typing.TypeVar("T", bound=int)) == 5
 
 
 def test_approx_type_hash():

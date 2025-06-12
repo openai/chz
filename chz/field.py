@@ -20,6 +20,7 @@ def field(
     # munger related
     munger: Munger | Callable[[Any, Any], Any] | None = None,
     x_type: TypeForm | _MISSING_TYPE = MISSING,
+    converter: Callable[[Any], Any] | None = None,
     # blueprint related
     meta_factory: chz.factories.MetaFactory | None | _MISSING_TYPE = MISSING,
     blueprint_unspecified: Callable[..., Any] | _MISSING_TYPE = MISSING,
@@ -48,6 +49,9 @@ def field(
 
         x_type: Useful in combination with mungers. This specifies the type before munging that
             will be used for parsing and type checking.
+
+        converter: Synonym for munger that works better with static type checkers. It accepts
+            a munger object or a callable that will be called as fn(value, chzself=chzself).
 
         meta_factory:
             Represents the set of possible callables that can give us a value of a given type.
@@ -87,6 +91,7 @@ def field(
         default_factory=default_factory,
         munger=munger,
         raw_x_type=x_type,
+        converter=converter,
         meta_factory=meta_factory,
         blueprint_unspecified=blueprint_unspecified,
         blueprint_cast=blueprint_cast,
@@ -107,6 +112,7 @@ class Field:
         default_factory: Callable[[], Any] | _MISSING_TYPE = MISSING,
         munger: Munger | Callable[[Any, Any], Any] | None = None,
         raw_x_type: TypeForm | _MISSING_TYPE = MISSING,
+        converter: Callable[[Any], Any] | None = None,
         meta_factory: chz.factories.MetaFactory | None | _MISSING_TYPE = MISSING,
         blueprint_unspecified: Callable[..., Any] | _MISSING_TYPE = MISSING,
         blueprint_cast: Callable[[str], object] | None = None,
@@ -145,6 +151,22 @@ class Field:
                     "not a MetaFactory. Note that default_factory must be callable without any "
                     "arguments and does not interact with parametrisation."
                 )
+
+        if converter is not None:
+            if munger is not None:
+                raise ValueError("Cannot specify both converter and munger")
+            if not callable(converter):
+                raise TypeError(f"converter must be callable, not {type(converter)}")
+            if isinstance(converter, Munger):
+                munger = converter
+            else:
+                # Note: when the munger arg is a function, it is called as munger(chzself, value),
+                # but converters must be defined with the value as the only positional parameter,
+                # and so they are called as converter(value, chzself=chzself).
+                # TODO: change the signature of functions passed to the `munger` argument to be
+                # compatible with `converter`?
+                c = converter
+                munger = lambda s, v: c(v, chzself=s)  # type: ignore
 
         if munger is not None and not callable(munger):
             raise TypeError(f"munger must be callable, not {type(munger)}")
@@ -225,7 +247,7 @@ class Field:
             import chz.factories
 
             ret = chz.factories.standard(
-                self.x_type, unspecified=unspec, default_module=self._user_module
+                annotation=self.x_type, unspecified=unspec, default_module=self._user_module
             )
             ret.field_annotation = self.x_type
             ret.field_module = self._user_module
@@ -246,7 +268,7 @@ class Field:
             m = default_munger(self._munger)
 
         # Must return a new callable every time
-        return lambda chzself: m(chzself, field=self)
+        return lambda chzself: m(getattr(chzself, self.x_name), chzself=chzself, field=self)
 
     @property
     def metadata(self) -> dict[str, Any] | None:

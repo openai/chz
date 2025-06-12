@@ -35,17 +35,24 @@ def argv_to_blueprint_args(
     return ret
 
 
-def beta_argv_arg_to_string(key: str, value: Any) -> str:
+def beta_argv_arg_to_string(key: str, value: Any) -> list[str]:
     if isinstance(value, chz.blueprint.Castable):
-        return f"{key}={value.value}"
+        return [f"{key}={value.value}"]
     if isinstance(value, chz.blueprint.Reference):
-        return f"{key}@={value.ref}"
+        return [f"{key}@={value.ref}"]
     if isinstance(value, (types.FunctionType, type)):
-        return f"{key}={type_repr(value)}"
+        return [f"{key}={type_repr(value)}"]
     if isinstance(value, str):
-        return f"{key}={value}"
+        return [f"{key}={value}"]
     if isinstance(value, (int, float, bool)) or value is None:
-        return f"{key}={repr(value)}"
+        return [f"{key}={repr(value)}"]
+    if isinstance(value, (list, tuple)) and all(isinstance(e, str) for e in value):
+        return [f"{key}={','.join(value)}"]
+    if isinstance(value, dict):
+        args_list = []
+        for k, v in value.items():
+            args_list.extend(beta_argv_arg_to_string(f"{key}.{k}", v))
+        return args_list
     # Probably safe to use repr here, but I'm curious to see how people end up using this
     raise NotImplementedError(
         f"TODO: beta_blueprint_to_argv does not currently convert {value!r} of "
@@ -59,7 +66,12 @@ def beta_blueprint_to_argv(blueprint: chz.Blueprint[_T]) -> list[str]:
     Please do not use this function without asking @shantanu, it is slow and not fully robust,
     and more importantly, there may well be a better way to accomplish your goal.
     """
-    return [beta_argv_arg_to_string(key, value) for key, value in _collapse_layers(blueprint)]
+    ret = [
+        arg
+        for key, value in _collapse_layers(blueprint)
+        for arg in beta_argv_arg_to_string(key, value)
+    ]
+    return ret
 
 
 def _collapse_layer(ordered_args: Sequence[tuple[str, Any]], layer: Layer) -> list[tuple[str, Any]]:

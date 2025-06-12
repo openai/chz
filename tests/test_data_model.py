@@ -276,6 +276,36 @@ def test_asdict_computed_properties():
     assert chz.asdict(c) == {"x": 1.0}
 
 
+def test_asdict_include_type():
+    @chz.chz
+    class X:
+        a: int
+        b: int
+
+    @chz.chz
+    class Y:
+        a: int
+        b: int
+
+    x = X(a=1, b=2)
+    y = Y(a=1, b=2)
+
+    assert chz.asdict(x) == chz.asdict(y)
+    assert chz.asdict(x, include_type=True) != chz.asdict(y, include_type=True)
+
+
+@chz.chz
+class Outer:
+    @chz.chz
+    class Config:
+        v: int
+
+
+def test_asdict_include_type_nested_class():
+    cfg = Outer.Config(v=1)
+    assert chz.asdict(cfg, include_type=True)["__chz_type__"] == "test_data_model:Outer.Config"
+
+
 def test_replace():
     @chz.chz
     class X:
@@ -1163,3 +1193,34 @@ def test_metadata():
         a: int = chz.field(metadata={"foo": "bar"})
 
     assert X.__chz_fields__["a"].metadata == {"foo": "bar"}
+
+
+def test_traverse():
+    @chz.chz
+    class A:
+        a_value: int = 15
+
+    @chz.chz
+    class B:
+        a: A = chz.field(default_factory=A)
+        b_value: str = "hi"
+
+    @chz.chz
+    class C:
+        ba: tuple[A | B, ...] = (A(), B())
+        c_value: tuple[str, ...] = ("hello", "world")
+
+    assert list(chz.traverse(C())) == [
+        ("", C(ba=(A(a_value=15), B(a=A(a_value=15), b_value="hi")), c_value=("hello", "world"))),
+        ("ba", (A(a_value=15), B(a=A(a_value=15), b_value="hi"))),
+        ("ba.0", A(a_value=15)),
+        ("ba.0.a_value", 15),
+        ("ba.1", B(a=A(a_value=15), b_value="hi")),
+        ("ba.1.a", A(a_value=15)),
+        ("ba.1.a", A(a_value=15)),
+        ("ba.1.a.a_value", 15),
+        ("ba.1.b_value", "hi"),
+        ("c_value", ("hello", "world")),
+        ("c_value.0", "hello"),
+        ("c_value.1", "world"),
+    ]

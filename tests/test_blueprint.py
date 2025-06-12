@@ -440,6 +440,26 @@ def test_nested_all_defaults_primitive():
     assert chz.Blueprint(Y).make() == Y(x=None)
 
 
+def test_nested_all_defaults_unspecified_nested():
+    @chz.chz
+    class Value:
+        value: int
+
+    @chz.chz
+    class A:
+        value: Value
+
+    @chz.chz
+    class B(A):
+        value: Value = Value(value=1)
+
+    @chz.chz
+    class Main:
+        a: A = chz.field(blueprint_unspecified=B)
+
+    assert chz.Blueprint(Main).make() == Main(a=B(value=Value(value=1)))
+
+
 def test_nested_construction_with_default_factory():
     @chz.chz
     class ChildV1:

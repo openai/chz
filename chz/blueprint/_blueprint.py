@@ -141,12 +141,12 @@ class Blueprint(Generic[_T_cov_def]):
 
             self.entrypoint_repr = type_repr(entrypoint_type)
         else:
-            self.meta_factory = chz.factories.standard(target)
+            self.meta_factory = chz.factories.standard(annotation=target)
             entrypoint_type = target
             if self.meta_factory.unspecified_factory() is None:
                 if not callable(target):
                     raise ValueError(f"{target} is not callable")
-                self.meta_factory = chz.factories.standard(object, unspecified=target)
+                self.meta_factory = chz.factories.standard(annotation=object, unspecified=target)
                 entrypoint_type = object
 
             self.entrypoint_repr = type_repr(target)
@@ -598,7 +598,7 @@ def _collect_params_from_sequence(
             _Param(
                 name=str(i),
                 type=element_type,
-                meta_factory=chz.factories.standard(element_type),
+                meta_factory=chz.factories.standard(annotation=element_type),
                 default=None,
                 doc="",
                 blueprint_cast=None,
@@ -637,7 +637,7 @@ def _collect_params_from_mapping(
             _Param(
                 name=element,
                 type=element_type,
-                meta_factory=chz.factories.standard(element_type),
+                meta_factory=chz.factories.standard(annotation=element_type),
                 default=None,
                 doc="",
                 blueprint_cast=None,
@@ -661,7 +661,7 @@ def _collect_params_from_typed_dict(
             _Param(
                 name=key,
                 type=annotation,
-                meta_factory=chz.factories.standard(annotation),
+                meta_factory=chz.factories.standard(annotation=annotation),
                 # Mark the default as NotRequired to improve --help output
                 # We don't actually use the default values in Blueprint since we let
                 # instantiation handle insertion of default values
@@ -730,7 +730,7 @@ def _collect_params_from_callable(
                     _Param(
                         name=str(j),
                         type=param_annot,
-                        meta_factory=chz.factories.standard(param_annot),
+                        meta_factory=chz.factories.standard(annotation=param_annot),
                         default=None,
                         doc="",
                         blueprint_cast=None,
@@ -751,7 +751,7 @@ def _collect_params_from_callable(
                         _Param(
                             name=key,
                             type=annotation,
-                            meta_factory=chz.factories.standard(annotation),
+                            meta_factory=chz.factories.standard(annotation=annotation),
                             default=None,
                             doc="",
                             blueprint_cast=None,
@@ -767,7 +767,7 @@ def _collect_params_from_callable(
                         _Param(
                             name=element,
                             type=param_annot,
-                            meta_factory=chz.factories.standard(param_annot),
+                            meta_factory=chz.factories.standard(annotation=param_annot),
                             default=None,
                             doc="",
                             blueprint_cast=None,
@@ -782,7 +782,7 @@ def _collect_params_from_callable(
             _Param(
                 name=name,
                 type=param_annot,
-                meta_factory=chz.factories.standard(param_annot),
+                meta_factory=chz.factories.standard(annotation=param_annot),
                 default=_Default.from_inspect_param(sigparam),
                 doc="",
                 blueprint_cast=None,
@@ -1005,7 +1005,13 @@ def _construct_unspecified_param(
                     chz.is_chz(factory)
                     or (isinstance(factory, functools.partial) and chz.is_chz(factory.func))
                 )
-                and all(p.default is not None for p in sub_all_params.values())
+                and (
+                    all(
+                        p.default is not None
+                        for path, p in sub_all_params.items()
+                        if "." not in path.removeprefix(param_path + ".")
+                    )
+                )
             ):
                 assert not sub_missing_params
                 meta_factory_value[param_path] = factory

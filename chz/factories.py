@@ -117,6 +117,9 @@ class subclass(MetaFactory):
         self._base_cls = base_cls
         self._default_cls = default_cls
 
+    def __repr__(self) -> str:
+        return f"subclass(base_cls={self.base_cls!r}, default_cls={self.default_cls!r})"
+
     @property
     def base_cls(self) -> InstantiableType:
         if isinstance(self._base_cls, _MISSING_TYPE):
@@ -197,6 +200,9 @@ class function(MetaFactory):
         super().__init__()
         self.unspecified = unspecified
         self._default_module = default_module
+
+    def __repr__(self) -> str:
+        return f"function(unspecified={self.unspecified!r}, default_module={self.default_module!r})"
 
     @property
     def default_module(self) -> types.ModuleType | str | None:
@@ -337,6 +343,8 @@ def _find_subclass(spec: str, superclass: TypeForm):
     visited_subclasses = set()
     all_subclasses = collections.deque(superclass_class_origin.__subclasses__())
     all_subclasses.appendleft(superclass)
+
+    candidates = []
     while all_subclasses:
         cls = all_subclasses.popleft()
         if cls in visited_subclasses:
@@ -344,11 +352,19 @@ def _find_subclass(spec: str, superclass: TypeForm):
         visited_subclasses.add(cls)
         if cls.__name__ == base:
             assert module_name is None
-            return _maybe_generic(cls, generic, template=superclass)  # type: ignore[arg-type]
+            candidates.append(_maybe_generic(cls, generic, template=superclass))  # type: ignore[arg-type]
         cls_origin = getattr(cls, "__origin__", cls)
         assert cls_origin is not type
         all_subclasses.extend(cls_origin.__subclasses__())
-    raise MetaFromString(f"No subclass of {type_repr(superclass)} named {base!r}")
+
+    if len(candidates) == 0:
+        raise MetaFromString(f"No subclass of {type_repr(superclass)} named {base!r}")
+    if len(candidates) > 1:
+        raise MetaFromString(
+            f"Multiple subclasses of {type_repr(superclass)} named {base!r}: "
+            f"{', '.join(type_repr(c) for c in candidates)}"
+        )
+    return candidates[0]
 
 
 def _maybe_generic(
@@ -381,12 +397,14 @@ def _return_prospective(obj: Any, annotation: TypeForm, factory: str) -> Any:
         object,
         typing.Any,
         typing_extensions.Any,
-    }:
+    } and not isinstance(annotation, typing.TypeVar):
         if is_subtype_instance(obj, annotation):
             # Allow things to be instances!
+            # In some sense, this is just working around deficiencies in casting...
             return lambda: obj
     elif not callable(obj):
-        # ...including if we would just error on the next line
+        assert is_subtype_instance(obj, annotation)
+        # Also allow things to be instances if we would just error on the next line
         return lambda: obj
 
     if not callable(obj):
@@ -435,6 +453,7 @@ def get_unspecified_from_annotation(annotation: TypeForm) -> Callable[..., Any] 
 class standard(MetaFactory):
     def __init__(
         self,
+        *,
         annotation: TypeForm | _MISSING_TYPE = MISSING,
         unspecified: Callable[..., Any] | None = None,
         default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
@@ -443,6 +462,9 @@ class standard(MetaFactory):
         self._annotation = annotation
         self.original_unspecified = unspecified
         self._default_module = default_module
+
+    def __repr__(self) -> str:
+        return f"standard(annotation={self.annotation!r}, unspecified={self.original_unspecified!r}, default_module={self.default_module!r})"
 
     @property
     def annotation(self) -> TypeForm:
