@@ -717,6 +717,29 @@ def test_blueprint_values_variadic():
     assert chz.Blueprint(Main).apply(values).make() == main
 
 
+def test_blueprint_values_unspecified_sequence():
+    @chz.chz
+    class Element:
+        v: int
+
+    @chz.chz
+    class TheClass:
+        fixed_tuple: tuple[Element, Element] = chz.field(blueprint_unspecified=lambda: 1 / 0)
+        var_tuple: tuple[Element, ...] = chz.field(blueprint_unspecified=lambda: 1 / 0)
+        fixed_list: list[Element] = chz.field(blueprint_unspecified=lambda: 1 / 0)
+        var_list: list[Element] = chz.field(blueprint_unspecified=lambda: 1 / 0)
+
+    obj1 = TheClass(
+        fixed_tuple=(Element(v=1), Element(v=2)),
+        var_tuple=(Element(v=3), Element(v=4), Element(v=5)),
+        fixed_list=[Element(v=6), Element(v=7)],
+        var_list=[Element(v=8), Element(v=9), Element(v=10)],
+    )
+    vals = chz.beta_to_blueprint_values(obj1)
+    obj2 = chz.Blueprint(TheClass).apply(vals).make()
+    assert obj1 == obj2
+
+
 def test_duplicate_fields():
     # There is no way to detect this since __annotations__ is a dictionary
     @chz.chz

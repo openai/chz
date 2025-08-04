@@ -22,7 +22,7 @@ from chz.tiepin import (
     is_union_type,
     type_repr,
 )
-from chz.util import _MISSING_TYPE, MISSING
+from chz.util import MISSING, MISSING_TYPE
 
 
 class MetaFromString(Exception): ...
@@ -49,8 +49,8 @@ class MetaFactory:
 
     def __init__(self) -> None:
         # Set by chz.Field
-        self.field_annotation: TypeForm | _MISSING_TYPE = MISSING
-        self.field_module: types.ModuleType | str | _MISSING_TYPE = MISSING
+        self.field_annotation: TypeForm | MISSING_TYPE = MISSING
+        self.field_module: types.ModuleType | str | MISSING_TYPE = MISSING
 
     def unspecified_factory(self) -> Callable[..., Any] | None:
         """The default callable to use to get a value of the expected type.
@@ -110,8 +110,8 @@ class subclass(MetaFactory):
 
     def __init__(
         self,
-        base_cls: InstantiableType | _MISSING_TYPE = MISSING,
-        default_cls: InstantiableType | _MISSING_TYPE = MISSING,
+        base_cls: InstantiableType | MISSING_TYPE = MISSING,
+        default_cls: InstantiableType | MISSING_TYPE = MISSING,
     ) -> None:
         super().__init__()
         self._base_cls = base_cls
@@ -122,8 +122,8 @@ class subclass(MetaFactory):
 
     @property
     def base_cls(self) -> InstantiableType:
-        if isinstance(self._base_cls, _MISSING_TYPE):
-            assert not isinstance(self.field_annotation, _MISSING_TYPE)
+        if isinstance(self._base_cls, MISSING_TYPE):
+            assert not isinstance(self.field_annotation, MISSING_TYPE)
             if not isinstance(self.field_annotation, InstantiableType):
                 raise RuntimeError(
                     f"Must explicitly specify base_cls since {self.field_annotation!r} "
@@ -134,7 +134,7 @@ class subclass(MetaFactory):
 
     @property
     def default_cls(self) -> InstantiableType:
-        if isinstance(self._default_cls, _MISSING_TYPE):
+        if isinstance(self._default_cls, MISSING_TYPE):
             return self.base_cls
         return self._default_cls
 
@@ -161,7 +161,7 @@ class function(MetaFactory):
         self,
         unspecified: Callable[..., Any] | None = None,
         *,
-        default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
+        default_module: str | types.ModuleType | None | MISSING_TYPE = MISSING,
     ) -> None:
         """
         ATTN: this is soft deprecated, since `chz.factories.standard` is powerful enough to effectively
@@ -206,8 +206,8 @@ class function(MetaFactory):
 
     @property
     def default_module(self) -> types.ModuleType | str | None:
-        if isinstance(self._default_module, _MISSING_TYPE):
-            assert not isinstance(self.field_module, _MISSING_TYPE)
+        if isinstance(self._default_module, MISSING_TYPE):
+            assert not isinstance(self.field_module, MISSING_TYPE)
             return self.field_module
         return self._default_module
 
@@ -256,7 +256,7 @@ class function(MetaFactory):
         return _module_getattr(module, var)
 
     def perform_cast(self, value: str):
-        assert not isinstance(self.field_annotation, _MISSING_TYPE)
+        assert not isinstance(self.field_annotation, MISSING_TYPE)
         return _simplistic_try_cast(value, self.field_annotation)
 
 
@@ -454,9 +454,9 @@ class standard(MetaFactory):
     def __init__(
         self,
         *,
-        annotation: TypeForm | _MISSING_TYPE = MISSING,
+        annotation: TypeForm | MISSING_TYPE = MISSING,
         unspecified: Callable[..., Any] | None = None,
-        default_module: str | types.ModuleType | None | _MISSING_TYPE = MISSING,
+        default_module: str | types.ModuleType | None | MISSING_TYPE = MISSING,
     ) -> None:
         super().__init__()
         self._annotation = annotation
@@ -468,15 +468,15 @@ class standard(MetaFactory):
 
     @property
     def annotation(self) -> TypeForm:
-        if isinstance(self._annotation, _MISSING_TYPE):
-            assert not isinstance(self.field_annotation, _MISSING_TYPE)
+        if isinstance(self._annotation, MISSING_TYPE):
+            assert not isinstance(self.field_annotation, MISSING_TYPE)
             return self.field_annotation
         return self._annotation
 
     @property
     def default_module(self) -> types.ModuleType | str | None:
-        if isinstance(self._default_module, _MISSING_TYPE):
-            if isinstance(self.field_module, _MISSING_TYPE):
+        if isinstance(self._default_module, MISSING_TYPE):
+            if isinstance(self.field_module, MISSING_TYPE):
                 # TODO: maybe make this assert and make artificial use cases pass a value explicitly
                 return None
             return self.field_module
@@ -512,7 +512,7 @@ class standard(MetaFactory):
             # TODO: add docs for fun lambda case
             if module_name == "lambda" or module_name.startswith("lambda "):
                 default_module = self.default_module
-                if isinstance(default_module, _MISSING_TYPE) or default_module is None:
+                if isinstance(default_module, MISSING_TYPE) or default_module is None:
                     eval_ctx = None
                 else:
                     eval_ctx = default_module

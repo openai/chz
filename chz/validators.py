@@ -91,6 +91,24 @@ def lt(base) -> Callable[[Any, str], None]:
     return inner
 
 
+def ge(base) -> Callable[[Any, str], None]:
+    def inner(self: Any, attr: str) -> None:
+        value = getattr(self, attr)
+        if not value >= base:
+            raise ValueError(f"Expected {attr} to be greater or equal to {base}, got {value}")
+
+    return inner
+
+
+def le(base) -> Callable[[Any, str], None]:
+    def inner(self: Any, attr: str) -> None:
+        value = getattr(self, attr)
+        if not value <= base:
+            raise ValueError(f"Expected {attr} to be less or equal to {base}, got {value}")
+
+    return inner
+
+
 def valid_regex(self: Any, attr: str) -> None:
     """Check the attribute is a valid regex."""
     import re
@@ -104,11 +122,11 @@ def valid_regex(self: Any, attr: str) -> None:
 
 def const_default(self: Any, attr: str) -> None:
     """Check the attribute matches the field's default value."""
-    from chz.util import _MISSING_TYPE
+    from chz.util import MISSING_TYPE
 
     field: Field = self.__chz_fields__[attr.removeprefix("X_")]
     default = field._default
-    if isinstance(default, _MISSING_TYPE):
+    if isinstance(default, MISSING_TYPE):
         raise ValueError(
             "const_default requires a default value (default_factory is not supported)"
         )

@@ -1,4 +1,6 @@
 import re
+import textwrap
+from unittest.mock import patch
 
 import pytest
 
@@ -58,20 +60,30 @@ Available methods:
     ):
         chz.methods_entrypoint(Run1, argv=[])
 
-    with pytest.raises(
-        EntrypointHelpException,
-        match=re.escape(
-            """\
-WARNING: Missing required arguments for parameter(s): self.name, cluster
+    orig_get_help = chz.blueprint._blueprint.Blueprint.get_help
+    with (
+        # Disable color, which messes with the pytest.raises(..., match=...)
+        patch(
+            "chz.blueprint._blueprint.Blueprint.get_help",
+            lambda self, color: orig_get_help(self, color=False),
+        ),
+        pytest.raises(
+            EntrypointHelpException,
+            match=re.escape(
+                textwrap.dedent(
+                    """\
+                    WARNING: Missing required arguments for parameter(s): self.name, cluster
 
-Entry point: test_blueprint_methods:Run1.launch
+                    Entry point: test_blueprint_methods:Run1.launch
 
-  Launch a job on a cluster.
+                      Launch a job on a cluster.
 
-Arguments:
-  self       test_blueprint_methods:Run1  -
-  self.name  str                          -
-  cluster    str"""
+                    Arguments:
+                      self       test_blueprint_methods:Run1  -
+                      self.name  str                          -
+                      cluster    str"""
+                ),
+            ),
         ),
     ):
         chz.methods_entrypoint(Run1, argv=["launch", "--help"])

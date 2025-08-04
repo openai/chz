@@ -175,6 +175,24 @@ def test_validate_munger():
         A(a=1)
 
 
+def test_validate_ge_le() -> None:
+    @chz.chz
+    class A:
+        value: int = chz.field(validator=chz.validators.ge(0))
+
+    A(value=0)
+    with pytest.raises(ValueError, match="Expected X_value to be greater or equal to 0, got -1"):
+        A(value=-1)
+
+    @chz.chz
+    class B:
+        value: int = chz.field(validator=chz.validators.le(0))
+
+    B(value=0)
+    with pytest.raises(ValueError, match="Expected X_value to be less or equal to 0, got 1"):
+        B(value=1)
+
+
 def test_validate_inheritance_class_level():
     @chz.chz
     class X:

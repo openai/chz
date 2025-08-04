@@ -43,7 +43,7 @@ from chz.tiepin import (
     is_typed_dict,
     type_repr,
 )
-from chz.util import _MISSING_TYPE, MISSING
+from chz.util import MISSING, MISSING_TYPE
 
 _T = TypeVar("_T")
 _T_cov_def = TypeVar("_T_cov_def", covariant=True, default=Any)
@@ -457,8 +457,8 @@ def _lambda_repr(fn) -> str | None:
 
 @dataclass(frozen=True, kw_only=True)
 class _Default:
-    value: Any | _MISSING_TYPE
-    factory: Callable[..., Any] | _MISSING_TYPE
+    value: Any | MISSING_TYPE
+    factory: Callable[..., Any] | MISSING_TYPE
 
     def to_help_str(self) -> str:
         if self.factory is not MISSING:
@@ -473,7 +473,7 @@ class _Default:
         return ret
 
     def instantiate(self) -> Any:
-        if not isinstance(self.factory, _MISSING_TYPE):
+        if not isinstance(self.factory, MISSING_TYPE):
             return self.factory()
         return self.value
 
@@ -569,7 +569,10 @@ def _collect_params_from_sequence(
         obj_type_construct = tuple
 
     elif obj_origin is tuple:
-        args: tuple[Any, ...] = getattr(obj, "__args__", ())
+        args: tuple[Any, ...] | None = getattr(obj, "__args__", None)
+        if args is None:
+            args = (Any, ...)
+
         if len(args) == 2 and args[-1] is ...:
             # homogeneous tuple
             type_for_index = lambda i: args[0]
@@ -705,7 +708,12 @@ def _collect_params_from_callable(
         else:
             param_annot = sigparam.annotation
         if isinstance(param_annot, str):
-            param_annot = eval_in_context(param_annot, obj)
+            try:
+                param_annot = eval_in_context(param_annot, obj)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to evaluate parameter {name}: {param_annot} in signature {signature} of object {obj}"
+                ) from e
 
         if sigparam.kind == sigparam.POSITIONAL_ONLY:
             has_pos_only = True

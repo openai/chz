@@ -47,7 +47,12 @@ def beta_argv_arg_to_string(key: str, value: Any) -> list[str]:
     if isinstance(value, (int, float, bool)) or value is None:
         return [f"{key}={repr(value)}"]
     if isinstance(value, (list, tuple)) and all(isinstance(e, str) for e in value):
-        return [f"{key}={','.join(value)}"]
+        if not any("," in e for e in value):
+            return [f"{key}={','.join(value)}"]
+        args_list = []
+        for i, e in enumerate(value):
+            args_list.extend(beta_argv_arg_to_string(f"{key}.{i}", e))
+        return args_list
     if isinstance(value, dict):
         args_list = []
         for k, v in value.items():

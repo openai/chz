@@ -7,7 +7,7 @@ from typing import Any, Callable
 import chz
 from chz.mungers import Munger, default_munger
 from chz.tiepin import TypeForm
-from chz.util import _MISSING_TYPE, MISSING
+from chz.util import MISSING, MISSING_TYPE
 
 _FieldValidator = Callable[[Any, str], None]
 
@@ -15,15 +15,15 @@ _FieldValidator = Callable[[Any, str], None]
 def field(
     *,
     # default related
-    default: Any | _MISSING_TYPE = MISSING,
-    default_factory: Callable[[], Any] | _MISSING_TYPE = MISSING,
+    default: Any | MISSING_TYPE = MISSING,
+    default_factory: Callable[[], Any] | MISSING_TYPE = MISSING,
     # munger related
     munger: Munger | Callable[[Any, Any], Any] | None = None,
-    x_type: TypeForm | _MISSING_TYPE = MISSING,
+    x_type: TypeForm | MISSING_TYPE = MISSING,
     converter: Callable[[Any], Any] | None = None,
     # blueprint related
-    meta_factory: chz.factories.MetaFactory | None | _MISSING_TYPE = MISSING,
-    blueprint_unspecified: Callable[..., Any] | _MISSING_TYPE = MISSING,
+    meta_factory: chz.factories.MetaFactory | None | MISSING_TYPE = MISSING,
+    blueprint_unspecified: Callable[..., Any] | MISSING_TYPE = MISSING,
     blueprint_cast: Callable[[str], object] | None = None,
     # misc
     validator: _FieldValidator | (list[_FieldValidator] | None) = None,
@@ -109,12 +109,12 @@ class Field:
         name: str,
         raw_type: TypeForm | str,
         default: Any = MISSING,
-        default_factory: Callable[[], Any] | _MISSING_TYPE = MISSING,
+        default_factory: Callable[[], Any] | MISSING_TYPE = MISSING,
         munger: Munger | Callable[[Any, Any], Any] | None = None,
-        raw_x_type: TypeForm | _MISSING_TYPE = MISSING,
+        raw_x_type: TypeForm | MISSING_TYPE = MISSING,
         converter: Callable[[Any], Any] | None = None,
-        meta_factory: chz.factories.MetaFactory | None | _MISSING_TYPE = MISSING,
-        blueprint_unspecified: Callable[..., Any] | _MISSING_TYPE = MISSING,
+        meta_factory: chz.factories.MetaFactory | None | MISSING_TYPE = MISSING,
+        blueprint_unspecified: Callable[..., Any] | MISSING_TYPE = MISSING,
         blueprint_cast: Callable[[str], object] | None = None,
         validator: _FieldValidator | (list[_FieldValidator] | None) = None,
         repr: bool | Callable[[Any], str] = True,
@@ -229,7 +229,7 @@ class Field:
 
     @functools.cached_property
     def x_type(self) -> TypeForm:
-        if isinstance(self._raw_x_type, _MISSING_TYPE):
+        if isinstance(self._raw_x_type, MISSING_TYPE):
             return self.final_type
         return self._raw_x_type
 
@@ -238,8 +238,8 @@ class Field:
         if self._meta_factory is None:
             return None
 
-        if isinstance(self._meta_factory, _MISSING_TYPE):
-            if isinstance(self._blueprint_unspecified, _MISSING_TYPE):
+        if isinstance(self._meta_factory, MISSING_TYPE):
+            if isinstance(self._blueprint_unspecified, MISSING_TYPE):
                 unspec = None
             else:
                 unspec = self._blueprint_unspecified
@@ -289,7 +289,7 @@ class Field:
         else:
             default_key = self._default_factory.__class__.__name__
 
-        if isinstance(self._default_factory, _MISSING_TYPE):
+        if isinstance(self._default_factory, MISSING_TYPE):
             default_factory_key = ""
         else:
             # TODO: support lambdas

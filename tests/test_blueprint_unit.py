@@ -18,6 +18,8 @@ def test_beta_argv_arg_to_string():
     }
     assert beta_argv_arg_to_string(k, v) == ["a.b.c.d=1", "a.b.e=2", "a.f=3"]
 
+    assert beta_argv_arg_to_string("k", ["1,2,3"]) == ["k.0=1,2,3"]
+
     class C:
         d: int
 
