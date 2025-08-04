@@ -1,6 +1,6 @@
 ## `chz.field`
 
-`chz.field takes the following parameters:
+`chz.field` takes the following parameters:
 
 #### `default`
 
