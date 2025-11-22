@@ -4,6 +4,7 @@ from . import blueprint, factories, mungers, tiepin, validators
 from .blueprint import (
     Blueprint,
     Castable,
+    dispatch_entrypoint,
     entrypoint,
     get_nested_target,
     methods_entrypoint,

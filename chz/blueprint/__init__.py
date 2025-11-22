@@ -9,6 +9,7 @@ from chz.blueprint._entrypoint import EntrypointHelpException as EntrypointHelpE
 from chz.blueprint._entrypoint import ExtraneousBlueprintArg as ExtraneousBlueprintArg
 from chz.blueprint._entrypoint import InvalidBlueprintArg as InvalidBlueprintArg
 from chz.blueprint._entrypoint import MissingBlueprintArg as MissingBlueprintArg
+from chz.blueprint._entrypoint import dispatch_entrypoint as dispatch_entrypoint
 from chz.blueprint._entrypoint import entrypoint as entrypoint
 from chz.blueprint._entrypoint import exit_on_entrypoint_error as exit_on_entrypoint_error
 from chz.blueprint._entrypoint import get_nested_target as get_nested_target

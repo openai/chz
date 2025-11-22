@@ -18,6 +18,8 @@ def test_beta_argv_arg_to_string():
     }
     assert beta_argv_arg_to_string(k, v) == ["a.b.c.d=1", "a.b.e=2", "a.f=3"]
 
+    assert beta_argv_arg_to_string("nums", [1, 2, 3]) == ["nums=1,2,3"]
+    assert beta_argv_arg_to_string("flags", [True, None, False]) == ["flags=True,None,False"]
     assert beta_argv_arg_to_string("k", ["1,2,3"]) == ["k.0=1,2,3"]
 
     class C:
@@ -93,6 +95,7 @@ def test_join_arg_path():
 def test_arg_map():
     layer = Layer({"a.b.c": 0, "a.b.c.one": 1, "a.b.c.two": 2}, None)
     arg_map = ArgumentMap([layer])
+    arg_map.consolidate()
 
     assert arg_map.get_kv("a.b.c.one").key == "a.b.c.one"
     assert arg_map.get_kv("a.b.c.two").key == "a.b.c.two"
@@ -107,12 +110,14 @@ def test_arg_map():
 
     layer = Layer({"prefix_suffix": 1}, None)
     arg_map = ArgumentMap([layer])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("prefix") == []
     assert arg_map.subpaths("prefix", strict=True) == []
 
     layer = Layer({"": 1, "a": 2}, None)
     arg_map = ArgumentMap([layer])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("") == ["", "a"]
     assert arg_map.subpaths("", strict=True) == ["a"]
@@ -121,6 +126,7 @@ def test_arg_map():
 def test_arg_map_wildcard():
     layer_wildcard = Layer({"a...c.one": 1, "a...c.two": 2}, None)
     arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
 
     assert arg_map.get_kv("a.b.c.one").key == "a...c.one"
     assert arg_map.get_kv("a.b.b.b.b.c.one").key == "a...c.one"
@@ -131,6 +137,7 @@ def test_arg_map_wildcard():
 
     layer_wildcard = Layer({"...one": 1}, None)
     arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("a.b.c.one") == [""]
     assert arg_map.subpaths("a.b.c.two") == []
@@ -138,30 +145,54 @@ def test_arg_map_wildcard():
 
     layer_wildcard = Layer({"a...one...b...one": 1}, None)
     arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("a.one.x.one") == ["...b...one"]
 
     layer_wildcard = Layer({"...prefix_suffix": 1}, None)
     arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("something.prefix") == []
     assert arg_map.subpaths("something.prefix", strict=True) == []
 
     layer_wildcard = Layer({"...a.key.key": 1, "...a.key.key...x": 2}, None)
     arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
 
     assert arg_map.subpaths("a.key") == ["key...x", "key"]
     assert arg_map.subpaths("") == ["...a.key.key...x", "...a.key.key"]
 
+    layer_wildcard = Layer({"...c": 1, "...b.c": 2}, None)
+    arg_map = ArgumentMap([layer_wildcard])
+    arg_map.consolidate()
+
+    assert arg_map.get_kv("a.b.c").key == "...b.c"
+    assert arg_map.get_kv("a.c.c").key == "...c"
+
+    wildcard_layer = Layer({"...bar.delta": "wildcard"}, "wild")
+    qualified_layer = Layer({"foo.bar.alpha": "alpha", "foo.bar.delta": "qualified"}, "qual")
+    arg_map = ArgumentMap([wildcard_layer, qualified_layer])
+    arg_map.consolidate()
+
+    assert arg_map.get_kv("another.bar.delta").key == "...bar.delta"
+    assert arg_map.get_kv("foo.bar.delta").key == "foo.bar.delta"
+
+    arg_map = ArgumentMap([qualified_layer, wildcard_layer])
+    arg_map.consolidate()
+
+    assert arg_map.get_kv("another.bar.delta").key == "...bar.delta"
+    assert arg_map.get_kv("foo.bar.delta").key == "...bar.delta"
+
 
 def test_layer():
     l = Layer({"...a": 0, "a": 1}, None)
-    assert l.get_kv("a") == ("a", 1)
+    assert l.get_kv("a") == ("a", 1, None)
     l = Layer({"a": 1, "...a": 0}, None)
-    assert l.get_kv("a") == ("a", 1)
+    assert l.get_kv("a") == ("a", 1, None)
 
     l = Layer({"...z": 1, "...x...y...z": 2, "...y...z": 3}, None)
-    assert l.get_kv("x.y.z") == ("...x...y...z", 2)
+    assert l.get_kv("x.y.z") == ("...x...y...z", 2, None)
 
 
 def test_collapse_layers():

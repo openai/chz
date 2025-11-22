@@ -1,37 +1,41 @@
 from __future__ import annotations
 
 import bisect
+import re
 from dataclasses import dataclass
-from typing import AbstractSet, Any, Iterator, Mapping
+from typing import TYPE_CHECKING, AbstractSet, Any, Iterator, Mapping
 
 from chz.blueprint._entrypoint import ExtraneousBlueprintArg
 from chz.blueprint._wildcard import wildcard_key_approx, wildcard_key_to_regex
 
+if TYPE_CHECKING:
+    from chz.blueprint._blueprint import _MakeResult
+
 
 class Layer:
-    def __init__(self, params: Mapping[str, Any], layer_name: str | None):
-        self._params = params
+    def __init__(self, args: Mapping[str, Any], layer_name: str | None):
+        self._args = args
         self.layer_name = layer_name
 
+        # Computed from the above
         self.qualified = {}
         self.wildcard = {}
         self._to_regex = {}
         # Match more specific wildcards first
-        for k, v in sorted(params.items(), key=lambda kv: -len(kv[0])):
+        for k, v in sorted(args.items(), key=lambda kv: -len(kv[0])):
             if "..." in k:
                 self.wildcard[k] = v
                 self._to_regex[k] = wildcard_key_to_regex(k)
             else:
                 self.qualified[k] = v
 
-        self.qualified_sorted = sorted(self.qualified.keys())
-
-    def get_kv(self, exact_key: str) -> tuple[str, Any] | None:
+    def get_kv(self, exact_key: str) -> tuple[str, Any, str | None] | None:
+        # TODO: remove this method
         if exact_key in self.qualified:
-            return exact_key, self.qualified[exact_key]
+            return exact_key, self.qualified[exact_key], self.layer_name
         for wildcard_key, value in self.wildcard.items():
             if self._to_regex[wildcard_key].fullmatch(exact_key):
-                return wildcard_key, value
+                return wildcard_key, value, self.layer_name
         return None
 
     def iter_keys(self) -> Iterator[tuple[str, bool]]:
@@ -42,7 +46,8 @@ class Layer:
         if subpath is None:
             return self
         return Layer(
-            {join_arg_path(subpath, k): v for k, v in self._params.items()}, self.layer_name
+            {join_arg_path(subpath, k): v for k, v in self._args.items()},
+            self.layer_name,
         )
 
     def __repr__(self) -> str:
@@ -69,8 +74,30 @@ class ArgumentMap:
     def __init__(self, layers: list[Layer]) -> None:
         self._layers = layers
 
+        self.consolidated = False
+        self.consolidated_qualified: dict[str, tuple[Any, int]] = {}
+        self.consolidated_qualified_sorted: list[str] = []
+        self.consolidated_wildcard: list[tuple[str, re.Pattern[str], Any, int]] = []
+
     def add_layer(self, layer: Layer) -> None:
         self._layers.append(layer)
+        self.consolidated = False
+
+    def consolidate(self) -> None:
+        self.consolidated_qualified = {}
+        for i, layer in enumerate(self._layers):
+            for key, value in layer.qualified.items():
+                self.consolidated_qualified[key] = (value, i)
+        self.consolidated_qualified_sorted = sorted(self.consolidated_qualified.keys())
+
+        self.consolidated_wildcard = []
+        for i, layer in reversed(list(enumerate(self._layers))):
+            for wildcard_key, value in layer.wildcard.items():
+                self.consolidated_wildcard.append(
+                    (wildcard_key, layer._to_regex[wildcard_key], value, i)
+                )
+
+        self.consolidated = True
 
     def subpaths(self, path: str, strict: bool = False) -> list[str]:
         """Returns the suffix of arguments this contains that would match a subpath of path.
@@ -81,6 +108,7 @@ class ArgumentMap:
         Args:
             strict: Whether to avoid returning arguments that match path exactly.
         """
+        assert self.consolidated, "ArgumentMap must be consolidated before calling subpaths"
         assert not path.endswith(".")
 
         wildcard_literal = path.split(".")[-1]
@@ -90,69 +118,85 @@ class ArgumentMap:
         path_plus_dot = path + "."
 
         ret = []
-        for layer in self._layers:
-            if not strict and path in layer.qualified:
-                ret.append("")
+        if not strict and path in self.consolidated_qualified:
+            ret.append("")
 
+        if not path:
+            ret.extend([k for k in self.consolidated_qualified_sorted if k])
+
+        index = bisect.bisect_left(self.consolidated_qualified_sorted, path_plus_dot)
+        for i in range(index, len(self.consolidated_qualified_sorted)):
+            key = self.consolidated_qualified_sorted[i]
+            if not key.startswith(path_plus_dot):
+                break
+            ret.append(key.removeprefix(path_plus_dot))
+            assert key == join_arg_path(path, ret[-1])
+
+        for key, pattern, _value, _index in self.consolidated_wildcard:
             if not path:
-                ret.extend([k for k in layer.qualified_sorted if k])
-                ret.extend(layer.wildcard)
+                ret.append(key)
                 continue
 
-            index = bisect.bisect_left(layer.qualified_sorted, path_plus_dot)
-            for i in range(index, len(layer.qualified_sorted)):
-                key = layer.qualified_sorted[i]
-                if not key.startswith(path_plus_dot):
+            # If it's not a wildcard, the logic is straightforward. But doing the equivalent
+            # for wildcards is tricky!
+            i = key.rfind(wildcard_literal)
+            if i == -1:
+                continue
+            # The not strict case is not complicated, we just regex match
+            if pattern.fullmatch(path):
+                if not strict:
+                    ret.append("")
+                    assert pattern.fullmatch(path + ret[-1])
+                continue
+            # This needs a little thinking about.
+            # Say path is "foo.bar" and key is "...bar...baz"
+            # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
+            # Since it does, we append "...baz"
+            while i != -1:
+                if (
+                    i + len(wildcard_literal) < len(key)
+                    and key[i + len(wildcard_literal)] == "."
+                    and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
+                ):
+                    assert i == 0 or key[i - 1] == "."
+
+                    suffix = key[i + len(wildcard_literal) :]
+                    if not suffix.startswith("..."):
+                        suffix = suffix.removeprefix(".")
+                    ret.append(suffix)
+                    assert pattern.fullmatch(join_arg_path(path, ret[-1]))
                     break
-                ret.append(key.removeprefix(path_plus_dot))
-                assert key == join_arg_path(path, ret[-1])
-
-            for key in layer.wildcard:
-                # If it's not a wildcard, the logic is straightforward. But doing the equivalent
-                # for wildcards is tricky!
-                i = key.rfind(wildcard_literal)
-                if i == -1:
-                    continue
-                # The not strict case is not complicated, we just regex match
-                if layer._to_regex[key].fullmatch(path):
-                    if not strict:
-                        ret.append("")
-                        assert layer._to_regex[key].fullmatch(path + ret[-1])
-                    continue
-                # This needs a little thinking about.
-                # Say path is "foo.bar" and key is "...bar...baz"
-                # Then wildcard_literal is "bar" and we check if "...bar" matches "foo.bar"
-                # Since it does, we append "...baz"
-                while i != -1:
-                    if (
-                        i + len(wildcard_literal) < len(key)
-                        and key[i + len(wildcard_literal)] == "."
-                        and wildcard_key_to_regex(key[: i + len(wildcard_literal)]).fullmatch(path)
-                    ):
-                        assert i == 0 or key[i - 1] == "."
-
-                        suffix = key[i + len(wildcard_literal) :]
-                        if not suffix.startswith("..."):
-                            suffix = suffix.removeprefix(".")
-                        ret.append(suffix)
-                        assert layer._to_regex[key].fullmatch(join_arg_path(path, ret[-1]))
-                        break
-                    i_next = key.rfind(wildcard_literal, 0, i)
-                    assert i_next < i, "Infinite loop"
-                    i = i_next
+                i_next = key.rfind(wildcard_literal, 0, i)
+                assert i_next < i, "Infinite loop"
+                i = i_next
         return ret
 
-    def get_kv(self, exact_key: str) -> _FoundArgument | None:
-        for index in reversed(range(len(self._layers))):
-            layer = self._layers[index]
-            if kv := layer.get_kv(exact_key):
-                return _FoundArgument(kv[0], kv[1], index, layer.layer_name)
+    def get_kv(self, exact_key: str, *, ignore_wildcards: bool = False) -> _FoundArgument | None:
+        assert self.consolidated, "ArgumentMap must be consolidated before calling get_kv"
+        lookup = self.consolidated_qualified.get(exact_key)
+
+        if not ignore_wildcards:
+            lookup_index = lookup[1] if lookup is not None else -1
+
+            for wildcard_key, pattern, value, index in self.consolidated_wildcard:
+                if index <= lookup_index:
+                    break
+                if pattern.fullmatch(exact_key):
+                    layer_name = self._layers[index].layer_name
+                    return _FoundArgument(wildcard_key, value, index, layer_name=layer_name)
+
+        if lookup is not None:
+            value, lookup_index = lookup
+            layer_name = self._layers[lookup_index].layer_name
+            return _FoundArgument(exact_key, value, lookup_index, layer_name=layer_name)
+
         return None
 
     def check_extraneous(
         self,
         used_args: set[tuple[str, int]],
         param_paths: AbstractSet[str],
+        make_result: _MakeResult,
         *,
         entrypoint_repr: str,
     ) -> None:
@@ -204,8 +248,24 @@ class ArgumentMap:
                             valid_parent = _valid_parent(parts, param_paths)
                             if valid_parent is None:
                                 extra += f"\nNo param found matching {parts[0]!r}"
-                            elif valid_parent != ".".join(parts[:-1]):
-                                extra += f"\nParam {valid_parent!r} is closest valid ancestor"
+                            else:
+                                from chz.blueprint._blueprint import _found_arg_desc
+
+                                extra += f"\n\nParam {valid_parent!r} is closest valid ancestor"
+                                parent_found_arg = self.get_kv(valid_parent)
+                                param = make_result.all_params[valid_parent]
+                                desc = _found_arg_desc(
+                                    make_result,
+                                    parent_found_arg,
+                                    param_path=valid_parent,
+                                    param=param,
+                                    omit_redundant=False,
+                                )
+                                invalid_part = (
+                                    ".".join(parts).removeprefix(valid_parent + ".").split(".")[0]
+                                )
+                                extra += f"\nParam {valid_parent!r} is set to {desc}"
+                                extra += f"\nSubparam {invalid_part!r} does not exist on it"
 
                     raise ExtraneousBlueprintArg(
                         f"Extraneous argument {key!r} to Blueprint for {entrypoint_repr}"

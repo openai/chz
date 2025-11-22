@@ -13,8 +13,11 @@ your fields:
 
 If I were to rewrite `chz` from scratch, I would do things a little bit differently here (and I
 may yet change some of this stuff). In a tale as old as time, I ended up where we are today via a
-several changes over in response to various things over a long period of time. I have one more big
+several changes in response to several things over a period of several years. I have one more big
 change planned at some point.
+
+Most notably, chz sort of predates PEP 681. E.g. the `X_` stuff that is most incompatible with
+PEP 681 was made inconvenient (it used to be `隐_`), but these things proved useful and I relented.
 
 ### No `__post_init__`
 

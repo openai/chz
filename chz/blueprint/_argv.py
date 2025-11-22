@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import types
-from typing import Any, Sequence, TypeVar
+from typing import Any, TypeVar
 
 import chz.blueprint
 from chz.blueprint._argmap import Layer
@@ -46,13 +46,16 @@ def beta_argv_arg_to_string(key: str, value: Any) -> list[str]:
         return [f"{key}={value}"]
     if isinstance(value, (int, float, bool)) or value is None:
         return [f"{key}={repr(value)}"]
-    if isinstance(value, (list, tuple)) and all(isinstance(e, str) for e in value):
-        if not any("," in e for e in value):
-            return [f"{key}={','.join(value)}"]
-        args_list = []
-        for i, e in enumerate(value):
-            args_list.extend(beta_argv_arg_to_string(f"{key}.{i}", e))
-        return args_list
+    if isinstance(value, (list, tuple)):
+        if all(isinstance(e, str) for e in value):
+            if not any("," in e for e in value):
+                return [f"{key}={','.join(value)}"]
+            args_list = []
+            for i, e in enumerate(value):
+                args_list.extend(beta_argv_arg_to_string(f"{key}.{i}", e))
+            return args_list
+        elif all(isinstance(e, (int, float, bool)) or e is None for e in value):
+            return [f"{key}={','.join(map(str, value))}"]
     if isinstance(value, dict):
         args_list = []
         for k, v in value.items():
@@ -79,31 +82,33 @@ def beta_blueprint_to_argv(blueprint: chz.Blueprint[_T]) -> list[str]:
     return ret
 
 
-def _collapse_layer(ordered_args: Sequence[tuple[str, Any]], layer: Layer) -> list[tuple[str, Any]]:
+def _collapse_layer(
+    ordered_args: list[tuple[str, Any]], ordered_arg_keys: set[str], layer: Layer
+) -> None:
     """Collapses `layer` into `ordered_args`, overriding any old keys as necessary."""
 
     layer_args: list[tuple[str, Any]] = []
     keys_to_remove: set[str] = set()
-
-    previous_keys = {prev_key for prev_key, _ in ordered_args}
 
     for key, value in itertools.chain(layer.qualified.items(), layer.wildcard.items()):
         # Remove any previous args that would be overwritten by this one.
         wildcard = wildcard_key_to_regex(key) if "..." in key else None
 
         if wildcard:
-            for prev_key, _ in ordered_args:
+            for prev_key in ordered_arg_keys:
                 # TODO(shantanu): usually this regex is only matched against concrete keys
                 # However, here we're matching against other wildcards
                 if wildcard.fullmatch(prev_key):
                     keys_to_remove.add(prev_key)
         else:
-            if key in previous_keys:
+            if key in ordered_arg_keys:
                 keys_to_remove.add(key)
         layer_args.append((key, value))
 
-    # Commit the new layer.
-    return [arg for arg in ordered_args if arg[0] not in keys_to_remove] + layer_args
+    # Commit the new layer
+    ordered_args[:] = [arg for arg in ordered_args if arg[0] not in keys_to_remove] + layer_args
+    ordered_arg_keys.difference_update(keys_to_remove)
+    ordered_arg_keys.update(key for key, _ in layer_args)
 
 
 def _collapse_layers(blueprint: chz.Blueprint[_T]) -> list[tuple[str, Any]]:
@@ -112,6 +117,7 @@ def _collapse_layers(blueprint: chz.Blueprint[_T]) -> list[tuple[str, Any]]:
     These could be applied as a single layer to a new blueprint to recreate the original.
     """
     ordered_args: list[tuple[str, Any]] = []
+    ordered_arg_keys: set[str] = set()
     for layer in blueprint._arg_map._layers:
-        ordered_args = _collapse_layer(ordered_args, layer)
+        _collapse_layer(ordered_args, ordered_arg_keys, layer)
     return ordered_args

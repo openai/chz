@@ -62,7 +62,10 @@ def test_blueprint_extraneous_valid_parent():
     with pytest.raises(
         ExtraneousBlueprintArg,
         match=r"""Extraneous argument 'b.cc.nope' to Blueprint for test_blueprint_errors:test_blueprint_extraneous_valid_parent.<locals>.A \(from command line\)
+
 Param 'b' is closest valid ancestor
+Param 'b' is set to test_blueprint_errors:test_blueprint_extraneous_valid_parent.<locals>.B \(blueprint_unspecified\)
+Subparam 'cc' does not exist on it
 Append --help to your command to see valid arguments""",
     ):
         chz.entrypoint(A, argv=["b.cc.nope=0"])

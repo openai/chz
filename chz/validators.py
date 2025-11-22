@@ -254,7 +254,7 @@ class IsOverrideMixin:
 
     ```
     @chz.chz
-    class Foo(IsOverrideMixinMixin):
+    class Foo(IsOverrideMixin):
         x: int = chz.field(default=1)
         y: int = chz.field(default=1)
     ```

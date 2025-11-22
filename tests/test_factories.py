@@ -307,8 +307,8 @@ def test_standard_special_forms():
 def test_standard_subclass_duplicate():
     class Parent: ...
 
-    type("Child", (Parent,), {})
-    type("Child", (Parent,), {})
+    ca = type("Child", (Parent,), {})  # noqa: F841
+    cb = type("Child", (Parent,), {})  # noqa: F841
 
     f = standard(annotation=Parent)
     with pytest.raises(

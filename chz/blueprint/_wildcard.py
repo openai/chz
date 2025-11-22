@@ -3,12 +3,16 @@ import re
 _FUZZY_SIMILARITY = 0.6
 
 
-def wildcard_key_to_regex(key: str) -> re.Pattern[str]:
+def wildcard_key_to_regex_str(key: str) -> str:
     if key.endswith("..."):
         raise ValueError("Wildcard not allowed at end of key")
     pattern = r"(.*\.)?" if key.startswith("...") else ""
     pattern += r"\.(.*\.)?".join(map(re.escape, key.removeprefix("...").split("...")))
-    return re.compile(pattern)
+    return pattern
+
+
+def wildcard_key_to_regex(key: str) -> re.Pattern[str]:
+    return re.compile(wildcard_key_to_regex_str(key))
 
 
 def _wildcard_key_match(key: str, target_str: str) -> bool:

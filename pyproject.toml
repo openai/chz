@@ -6,7 +6,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "Shantanu Jain"}, {email = "shantanu@openai.com"}]
 dependencies = [
-    "typing-extensions>=4.7",
+    "typing-extensions>=4.13",
 ]
 requires-python = ">=3.11"
 

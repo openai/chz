@@ -89,10 +89,23 @@ def check_reference_targets(
 ) -> None:
     invalid_references: dict[str, list[str]] = {}
 
-    for param_path, value in value_mapping.items():
+    def record_invalid(ref: str, referrer: str) -> None:
+        if not referrer:
+            return
+        if ref not in param_paths:
+            referrers = invalid_references.setdefault(ref, [])
+            if referrer not in referrers:
+                referrers.append(referrer)
+
+    def walk(value: Evaluatable, referrer: str) -> None:
         if isinstance(value, ParamRef):
-            if value.ref not in param_paths:
-                invalid_references.setdefault(value.ref, []).append(param_path)
+            record_invalid(value.ref, referrer)
+        elif isinstance(value, Thunk):
+            for param_ref in value.kwargs.values():
+                walk(param_ref, referrer)
+
+    for param_path, value in value_mapping.items():
+        walk(value, param_path)
 
     if invalid_references:
         errors = []

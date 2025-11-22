@@ -19,7 +19,7 @@ def test_castable():
 
     with pytest.raises(
         InvalidBlueprintArg,
-        match=r"Could not cast 'maybe' to Union\[bool, Literal\['both'\]\]",
+        match=r"Could not cast 'maybe' to (Union\[bool, Literal\['both'\]\]|bool \| typing.Literal\['both'\])",
     ):
         assert chz.Blueprint(A).apply({"a": Castable("maybe")}).make()
 

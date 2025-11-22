@@ -175,8 +175,9 @@ def is_instantiable_type(t: TypeForm) -> typing.TypeGuard[InstantiableType]:
 
 
 def is_union_type(t: TypeForm) -> bool:
+    # This has gotten a little messy with Python 3.14
     origin = getattr(t, "__origin__", t)
-    return origin is typing.Union or isinstance(t, types.UnionType)
+    return origin is typing.Union or isinstance(t, types.UnionType) or t is types.UnionType
 
 
 def is_typed_dict(t: TypeForm) -> bool:
@@ -467,6 +468,15 @@ def _simplistic_try_cast(inst_str: str, typ: TypeForm):
                 return value
             raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}")
 
+    if "datetime" in sys.modules:
+        import datetime
+
+        if origin is datetime.datetime:
+            try:
+                return datetime.datetime.fromisoformat(inst_str)
+            except ValueError:
+                raise CastError(f"Could not cast {repr(inst_str)} to {type_repr(typ)}") from None
+
     if "enum" in sys.modules:
         import enum
 
@@ -720,7 +730,23 @@ def is_subtype(left: TypeForm, right: TypeForm) -> bool:
             for left_param, right_param in zip(left_params, right_params)
         )
 
+    if is_typed_dict(left_origin) and is_typed_dict(right_origin):
+        if not right_origin.__required_keys__.issubset(left_origin.__required_keys__):
+            return False
+        left_hints = typing_extensions.get_type_hints(left_origin)
+        right_hints = typing_extensions.get_type_hints(right_origin)
+        for k, v in right_hints.items():
+            if k not in left_hints:
+                return False
+            if not is_subtype(left_hints[k], v):
+                # Technically this should be invariant due to mutability
+                return False
+        return True
+
     # TODO: handle other special forms
+
+    if left_origin is right_origin and left_args == right_args:
+        return True
 
     try:
         if not issubclass(left_origin, right_origin):

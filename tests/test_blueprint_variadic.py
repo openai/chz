@@ -155,12 +155,12 @@ def test_variadic_collections_type():
     ).make() == Main(seq=(X(a=1), X(a=2)), map={"first": X(a=3), "second": X(a=4)})
 
 
-def test_variadic_dict_non_str_key():
+def test_variadic_dict_non_int_or_str_key():
     @chz.chz
     class MainDict:
-        xs: dict[int, str]
+        xs: dict[float, str]
 
-    with pytest.raises(TypeError, match="Variadic dict type must take str keys, not int"):
+    with pytest.raises(TypeError, match="Variadic dict type must take str or int keys, not float"):
         chz.Blueprint(MainDict).apply({"xs.0": "a", "xs.1": "2"}).make()
 
     assert chz.Blueprint(MainDict).apply({"xs": {1: "2"}}).make() == MainDict(xs={1: "2"})

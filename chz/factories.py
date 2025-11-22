@@ -426,7 +426,7 @@ def _return_prospective(obj: Any, annotation: TypeForm, factory: str) -> Any:
 def get_unspecified_from_annotation(annotation: TypeForm) -> Callable[..., Any] | None:
     if typing.get_origin(annotation) is type:
         base_type = typing.get_args(annotation)[0]
-        if not isinstance(getattr(base_type, "__origin__", base_type), type):
+        if is_union_type(base_type):
             # No unspecified for type[SpecialForm] e.g. type[int | str]
             # TODO: annotated
             return None

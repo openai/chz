@@ -32,7 +32,7 @@ def test_type_repr():
     assert type_repr(X) == "test_tiepin:test_type_repr.<locals>.X"
 
     assert type_repr(typing.Literal["asdf"]) == "Literal['asdf']"
-    assert type_repr(typing.Union[int, str]) == "Union[int, str]"
+    assert type_repr(typing.Union[int, str]) in ("Union[int, str]", "int | str")
     assert (
         type_repr(typing.Callable[[int], X])
         == "Callable[[int], test_tiepin.test_type_repr.<locals>.X]"
@@ -906,6 +906,41 @@ def test_is_subtype_protocol():
 
     assert is_subtype_instance(a, typing.Callable[..., P1])
     assert not is_subtype_instance(a, typing.Callable[..., P2])
+
+
+def test_is_subtype_typed_dict():
+    class A(typing.TypedDict):
+        a: int
+        b: str
+
+    assert is_subtype(A, typing.Mapping[str, typing.Any])
+    assert not is_subtype(typing.Mapping[str, typing.Any], A)
+    assert is_subtype(A, dict[str, int | str])
+    assert is_subtype(A, dict[str, int])
+
+    class B(A):
+        c: bytes
+
+    assert is_subtype(B, A)
+    assert not is_subtype(A, B)
+
+    class B_alt(typing.TypedDict):
+        a: int
+        b: str
+        c: bytes
+
+    assert is_subtype(B_alt, B)
+    assert is_subtype(B, B_alt)
+
+    assert is_subtype(B_alt, A)
+    assert not is_subtype(A, B_alt)
+
+    class A_not_total(typing.TypedDict, total=False):
+        a: int
+        b: str
+
+    assert is_subtype(A, A_not_total)
+    assert not is_subtype(A_not_total, A)
 
 
 def test_is_subtype_typevar() -> None:

@@ -15,7 +15,7 @@ from typing import Any, Callable, Final, Generic, Mapping, Protocol
 from typing_extensions import TypeVar
 
 import chz
-from chz.blueprint._argmap import ArgumentMap, Layer, join_arg_path
+from chz.blueprint._argmap import ArgumentMap, Layer, _FoundArgument, join_arg_path
 from chz.blueprint._argv import argv_to_blueprint_args
 from chz.blueprint._entrypoint import (
     ConstructionException,
@@ -85,6 +85,18 @@ class Reference(SpecialArg):
         return f"Reference({self.ref!r})"
 
 
+@dataclass(frozen=True, kw_only=True)
+class Computed(SpecialArg):
+    """A parameter computed from other parameters in a Blueprint."""
+
+    src: dict[str, Reference]
+    compute: Callable[..., Any]
+
+    def __repr__(self) -> str:
+        arg_str = ", ".join(f"{k}@={v.ref}" for k, v in self.src.items())
+        return f"Computed({arg_str})"
+
+
 @dataclass(frozen=True)
 class _MakeResult:
     # `value_mapping` is a dictionary mapping from parameter paths to Evaluatable values.
@@ -116,6 +128,62 @@ class _MakeResult:
 
 def _entrypoint_caster(o: str) -> object:
     raise chz.tiepin.CastError("Will not interpret entrypoint as a value")
+
+
+def _found_arg_desc(
+    r: _MakeResult,
+    found_arg: _FoundArgument | None,
+    *,
+    param_path: str,
+    param: _Param,
+    omit_redundant: bool = True,
+    color: bool = False,
+) -> str:
+    if found_arg is None:
+        if param_path in r.meta_factory_value:
+            found_arg_str = type_repr(r.meta_factory_value[param_path])
+            if color:
+                found_arg_str += " \033[90m(meta_factory)\033[0m"
+            else:
+                found_arg_str += " (meta_factory)"
+        elif param.default is not None:
+            found_arg_str = param.default.to_help_str()
+            if color:
+                found_arg_str += " \033[90m(default)\033[0m"
+            else:
+                found_arg_str += " (default)"
+        elif (
+            param.meta_factory is not None
+            and (factory := param.meta_factory.unspecified_factory()) is not None
+            and (factory is not param.type or not omit_redundant)
+        ):
+            if getattr(factory, "__name__", None) == "<lambda>":
+                found_arg_str = _lambda_repr(factory) or type_repr(factory)
+            else:
+                found_arg_str = type_repr(factory)
+            if color:
+                found_arg_str += " \033[90m(blueprint_unspecified)\033[0m"
+            else:
+                found_arg_str += " (blueprint_unspecified)"
+        else:
+            found_arg_str = "-"
+    else:
+        if isinstance(found_arg.value, Castable):
+            found_arg_str = repr(found_arg.value.value)[1:-1]
+        elif isinstance(found_arg.value, Reference):
+            found_arg_str = f"@={found_arg.value.ref}"
+        elif isinstance(found_arg.value, Computed):
+            arg_str = ", ".join(f"{k}@={v.ref}" for k, v in found_arg.value.src.items())
+            found_arg_str = f"f({arg_str})"
+        else:
+            found_arg_str = type_repr(found_arg.value)
+        if found_arg.layer_name:
+            if color:
+                found_arg_str += f" \033[90m(from \033[94m{found_arg.layer_name}\033[90m)\033[0m"
+            else:
+                found_arg_str += f" (from {found_arg.layer_name})"
+
+    return found_arg_str
 
 
 class Blueprint(Generic[_T_cov_def]):
@@ -203,7 +271,10 @@ class Blueprint(Generic[_T_cov_def]):
         if strict:
             r = self._make_lazy()
             self._arg_map.check_extraneous(
-                r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+                r.used_args,
+                r.all_params.keys(),
+                make_result=r,
+                entrypoint_repr=self.entrypoint_repr,
             )
 
         return self
@@ -228,6 +299,8 @@ class Blueprint(Generic[_T_cov_def]):
         used_args: set[tuple[str, int]] = set()
         meta_factory_value: dict[str, Any] = {}
         missing_params: list[str] = []
+
+        self._arg_map.consolidate()
 
         value_mapping: dict[str, Evaluatable] | ConstructionIssue | None
         value_mapping = _construct_param(
@@ -265,7 +338,10 @@ class Blueprint(Generic[_T_cov_def]):
 
     def _make_from_make_result(self, r: _MakeResult) -> _T_cov_def:
         self._arg_map.check_extraneous(
-            r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+            r.used_args,
+            r.all_params.keys(),
+            make_result=r,
+            entrypoint_repr=self.entrypoint_repr,
         )
         check_reference_targets(r.value_mapping, r.all_params.keys())
         # Note we check for extraneous args first, so we get better errors for typos
@@ -309,7 +385,10 @@ class Blueprint(Generic[_T_cov_def]):
 
         try:
             self._arg_map.check_extraneous(
-                r.used_args, r.all_params.keys(), entrypoint_repr=self.entrypoint_repr
+                r.used_args,
+                r.all_params.keys(),
+                make_result=r,
+                entrypoint_repr=self.entrypoint_repr,
             )
         except ExtraneousBlueprintArg as e:
             output(f"WARNING: {e}\n")
@@ -342,48 +421,9 @@ class Blueprint(Generic[_T_cov_def]):
                 # If we're not using root polymorphism, skip this param
                 continue
 
-            if found_arg is None:
-                if param_path in r.meta_factory_value:
-                    found_arg_str = type_repr(r.meta_factory_value[param_path])
-                    if color:
-                        found_arg_str += " \033[90m(meta_factory)\033[0m"
-                    else:
-                        found_arg_str += " (meta_factory)"
-                elif param.default is not None:
-                    found_arg_str = param.default.to_help_str()
-                    if color:
-                        found_arg_str += " \033[90m(default)\033[0m"
-                    else:
-                        found_arg_str += " (default)"
-                elif (
-                    param.meta_factory is not None
-                    and (factory := param.meta_factory.unspecified_factory()) is not None
-                    and factory is not param.type
-                ):
-                    if getattr(factory, "__name__", None) == "<lambda>":
-                        found_arg_str = _lambda_repr(factory) or type_repr(factory)
-                    else:
-                        found_arg_str = type_repr(factory)
-                    if color:
-                        found_arg_str += " \033[90m(blueprint_unspecified)\033[0m"
-                    else:
-                        found_arg_str += " (blueprint_unspecified)"
-                else:
-                    found_arg_str = "-"
-            else:
-                if isinstance(found_arg.value, Castable):
-                    found_arg_str = repr(found_arg.value.value)[1:-1]
-                elif isinstance(found_arg.value, Reference):
-                    found_arg_str = f"@={found_arg.value.ref}"
-                else:
-                    found_arg_str = type_repr(found_arg.value)
-                if found_arg.layer_name:
-                    if color:
-                        found_arg_str += (
-                            f" \033[90m(from \033[94m{found_arg.layer_name}\033[90m)\033[0m"
-                        )
-                    else:
-                        found_arg_str += f" (from {found_arg.layer_name})"
+            found_arg_str = _found_arg_desc(
+                r, found_arg, param_path=param_path, param=param, color=color
+            )
 
             param_output.append(
                 (param_path or "<entrypoint>", type_repr(param.type), found_arg_str, param.doc)
@@ -623,13 +663,17 @@ def _collect_params_from_mapping(
     args: tuple[Any, ...] = getattr(obj, "__args__", ())
     if len(args) == 0:
         element_type = object
+        key_type = str
     elif len(args) == 2:
-        if args[0] is not str:
+        if args[0] not in (str, int):
             if elements:
-                raise TypeError(f"Variadic dict type must take str keys, not {type_repr(args[0])}")
+                raise TypeError(
+                    f"Variadic dict type must take str or int keys, not {type_repr(args[0])}"
+                )
             return ConstructionIssue(
-                f"Variadic dict type must take str keys, not {type_repr(args[0])}"
+                f"Variadic dict type must take str or int keys, not {type_repr(args[0])}"
             )
+        key_type = args[0]
         element_type = args[1]
     else:
         raise TypeError(f"Dict type {obj} must take 0 or 2 items")
@@ -648,7 +692,10 @@ def _collect_params_from_mapping(
             )
         )
 
-    return params, dict, [element_type]
+    def _dict(**kwargs) -> dict[int | str, Any]:
+        return {key_type(k): v for k, v in kwargs.items()}
+
+    return params, _dict, [element_type]
 
 
 def _collect_params_from_typed_dict(
@@ -1101,6 +1148,47 @@ def _construct_param(
         if not (param.meta_factory is not None and arg_map.subpaths(param_path, strict=True)):
             # TODO: deep copy?
             return {param_path: Value(spec)}
+
+    # ..or if it's a Reference to some other parameter
+    if isinstance(spec, Reference):
+        if spec.ref == param_path:
+            # If it's a self reference, treat it as if it were unspecified
+            value_mapping = _construct_unspecified_param(
+                param,
+                param_path=param_path,
+                arg_map=arg_map,
+                all_params=all_params,
+                used_args=used_args,
+                meta_factory_value=meta_factory_value,
+                missing_params=missing_params,
+            )
+            if isinstance(value_mapping, ConstructionIssue):
+                return value_mapping
+            if value_mapping is None and param.default is not None:
+                # See test_blueprint_reference_wildcard_default
+                # TODO: this is the only place we instantiate a default
+                default = param.default.instantiate()
+                return {param_path: Value(default)}
+            return value_mapping
+
+        return {param_path: ParamRef(spec.ref)}
+
+    elif isinstance(spec, Computed):
+        # If it inherits from a set of other parameters
+        if param_path in {spec.ref for spec in spec.src.values()}:
+            # Same as the unspecified param case
+            return _construct_unspecified_param(
+                param,
+                param_path=param_path,
+                arg_map=arg_map,
+                all_params=all_params,
+                used_args=used_args,
+                meta_factory_value=meta_factory_value,
+                missing_params=missing_params,
+            )
+        else:
+            kwargs = {k: ParamRef(v.ref) for k, v in spec.src.items()}
+            return {param_path: Thunk(kwargs=kwargs, fn=spec.compute)}
 
     # Otherwise, we see if we can cast it to the expected type:
     # `attr = trycast(spec.value, param.type)`
