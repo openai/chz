@@ -1,5 +1,78 @@
 # Changelog
 
+## November 2025
+
+- fix most tests on Python 3.14
+- support cast to `datetime.datetime`
+- improve `is_subtype` for `TypedDict`s
+- add `Computed` reference type, thanks sfitzgerald!
+- support int dict keys in blueprint, thanks hessam!
+- fix subparam mutation in the "template thing", thanks tz!
+- improve docs, thanks awei!
+- require newer `typing-extensions`
+
+## September 2025
+
+- add `dispatch_entrypoint`
+- several changes to optimise argmap lookups by collapsing and consolidating layers
+  - this is >10x speedup for some use cases
+- always print additional diagnostics for extraneous args, thanks camillo!
+- add `skip_default` arg to `beta_to_blueprint_values`, thanks charlieb!
+- add special casing for tuples in `beta_argv_arg_to_string`, thanks tz!
+- testing improvements
+
+## August 2025
+
+- mention the value of the closest ancestor for extraneous args to help with polymorphism confusion
+- improve extraneous arg error message
+- add `exclude` param to `asdict`, thanks andrey!
+- fix subtype check in the "template thing", thanks tz!
+- some cleanup of the "template thing"
+
+## July 2025
+
+- changes to add the "template thing" to blueprint, thanks xintao!
+  - this feature is not available in the open source version and I plan to attempt to remove it from the internal version
+- differentiate between untyped and zero length tuple in sequence param collection, thanks elwong!
+- fix `beta_argv_arg_to_string` behaviour for list elements that are strings containing commas
+
+## June 2025
+
+- better error if annotation eval fails, thanks jelle!
+- add `ge` and `le` validators, thanks cassirer!
+- special casing to make `beta_argv_arg_to_string` handle dicts, thanks yjiao!
+
+## May 2025
+
+- error for duplicate class when name is ambiguous
+- fix defaulting special case for nested args
+- add `chz.traverse`, thanks hessam!
+- better handling of type variables and meta factory casting
+- special casing to make `beta_argv_arg_to_string` involving lists more compact
+- improve `freeze_dict` munger static typing for optionals, thanks camillo!
+- add `include_type` param to `asdict`, thanks wenda and andrei!
+- internal refactoring
+
+## March 2025
+
+Improvements:
+- add "universal CLI" via `python -m chz.universal`
+- add `shallow` param to `asdict` to prevent deep copying, thanks wenda!
+- look at `builtins` and `__main__` to find object factories
+- support `*args` and `**kwargs` collection in blueprint
+- support type variables in `is_subtype`
+- fix variadics that match wildcards in more than one literal location
+- fix blueprint apply to subpath with empty key, thanks hessam!
+- suppert converter argument in field, thanks camillo!
+- refactor param collection in blueprint
+- various docs improvements, thanks andrey, csh, mtli!
+
+Error messages:
+- better error for a value with subparams specified
+- improve error for blueprint type mismatch
+- fix bug in `simplistic_type_of_value`
+- include Python's native suggestions for `AttributeError` in blueprint attribute access, thanks yifan!
+
 ## February 2025
 
 Improvements:
