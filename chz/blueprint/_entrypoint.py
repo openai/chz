@@ -38,6 +38,9 @@ def exit_on_entrypoint_error(fn: _F) -> _F:
         try:
             return fn(*args, **kwargs)
         except EntrypointException as e:
+            # Set this if you want to handle these exceptions yourself
+            if "CHZ_NO_CATCH_ENTRYPOINT_EXCEPTIONS" in os.environ:
+                raise
             if isinstance(e, EntrypointHelpException):
                 print(e, end="" if e.args[0][-1] == "\n" else "\n")
             else:
