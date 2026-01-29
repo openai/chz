@@ -103,16 +103,32 @@ def _approx_type_to_bytes(t) -> bytes:
 def approx_type_hash(t) -> str:
     return hashlib.sha1(_approx_type_to_bytes(t)).hexdigest()
 
+def get_module_of_obj(obj: object) -> typing.Optional[types.ModuleType]:
+    module_name = None
+    if hasattr(obj, "__init__"):
+        module_name = obj.__init__.__globals__.get("__name__", None)
+    elif hasattr(obj, "__module__"):
+        module_name = getattr(obj, "__module__", None)
+
+    return sys.modules.get(module_name, None) if module_name else None
 
 def eval_in_context(annot: str, obj: object) -> typing.Any:
     # Based on inspect.get_annotations
     if isinstance(obj, type):
         obj_globals = None
-        module_name = getattr(obj, "__module__", None)
-        if module_name:
-            module = sys.modules.get(module_name, None)
+        # if we imported `obj` from a module other than the one that defines it,
+        # we might not have imported all the names needed to eval the annotation.
+        # for that reason we try to get the `__globals__` dict of the module
+        # where the class was defined, via obj.__init__.__globals__ rather than
+        # via the __module__ attribute which might point to the importing module.
+        try:
+            obj_globals = obj.__init__.__globals__
+        except AttributeError:
+            # type with no __init__, e.g. builtins.int , fallback to module dict
+            module = get_module_of_obj(obj)
             if module:
                 obj_globals = getattr(module, "__dict__", None)
+
         obj_locals = dict(vars(obj))
         unwrap = obj
     elif isinstance(obj, types.ModuleType):
@@ -143,7 +159,23 @@ def eval_in_context(annot: str, obj: object) -> typing.Any:
             obj_globals = unwrap.__globals__
 
     assert isinstance(annot, str)
-    return eval(annot, obj_globals, obj_locals)
+
+    try:
+        return eval(annot, obj_globals, obj_locals)
+    except NameError as e:
+        # try reimporting module with TYPE_CHECKING set to true.
+        # this handles imports guarded by `if typing.TYPE_CHECKING:`
+        # which might still be used in type annotations.
+        module = get_module_of_obj(obj)
+        if module is not None:
+            try:
+                typing.TYPE_CHECKING = True
+                importlib.reload(module)
+                obj_globals = getattr(module, "__dict__", None)
+                return eval(annot, obj_globals, obj_locals)
+            finally:
+                typing.TYPE_CHECKING = False
+
 
 
 def maybe_eval_in_context(annot: str, obj: object) -> typing.Any:
