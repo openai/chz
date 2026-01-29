@@ -103,16 +103,89 @@ def _approx_type_to_bytes(t) -> bytes:
 def approx_type_hash(t) -> str:
     return hashlib.sha1(_approx_type_to_bytes(t)).hexdigest()
 
+def get_module_of_obj(obj: object) -> typing.Optional[types.ModuleType]:
+    module_name = None
+    if hasattr(obj, "__init__"):
+        module_name = obj.__init__.__globals__.get("__name__", None)
+    elif hasattr(obj, "__module__"):
+        module_name = getattr(obj, "__module__", None)
+
+    return sys.modules.get(module_name, None) if module_name else None
+
+
+def _is_type_checking_test(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "TYPE_CHECKING"
+    if isinstance(node, ast.Attribute):
+        return (
+            node.attr == "TYPE_CHECKING"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "typing"
+        )
+    return False
+
+
+def _collect_import_nodes(node: ast.AST, out: list[ast.stmt]) -> None:
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        out.append(node)
+        return
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        return
+    for child in ast.iter_child_nodes(node):
+        _collect_import_nodes(child, out)
+
+
+def _apply_type_checking_imports(module: types.ModuleType) -> bool:
+    source = None
+    try:
+        source = inspect.getsource(module)
+    except (OSError, TypeError):
+        module_file = getattr(module, "__file__", None)
+        if module_file:
+            try:
+                with open(module_file, "r", encoding="utf-8") as handle:
+                    source = handle.read()
+            except OSError:
+                return False
+        else:
+            return False
+
+    try:
+        tree = ast.parse(source, filename=getattr(module, "__file__", "<module>"))
+    except SyntaxError:
+        return False
+
+    import_nodes: list[ast.stmt] = []
+    for node in tree.body:
+        if isinstance(node, ast.If) and _is_type_checking_test(node.test):
+            for body_node in node.body:
+                _collect_import_nodes(body_node, import_nodes)
+
+    if not import_nodes:
+        return False
+
+    module_ast = ast.Module(body=import_nodes, type_ignores=[])
+    code = compile(module_ast, getattr(module, "__file__", "<module>"), "exec")
+    exec(code, module.__dict__, module.__dict__)
+    return True
 
 def eval_in_context(annot: str, obj: object) -> typing.Any:
     # Based on inspect.get_annotations
     if isinstance(obj, type):
         obj_globals = None
-        module_name = getattr(obj, "__module__", None)
-        if module_name:
-            module = sys.modules.get(module_name, None)
+        # if we imported `obj` from a module other than the one that defines it,
+        # we might not have imported all the names needed to eval the annotation.
+        # for that reason we try to get the `__globals__` dict of the module
+        # where the class was defined, via obj.__init__.__globals__ rather than
+        # via the __module__ attribute which might point to the importing module.
+        try:
+            obj_globals = obj.__init__.__globals__
+        except AttributeError:
+            # type with no __init__, e.g. builtins.int , fallback to module dict
+            module = get_module_of_obj(obj)
             if module:
                 obj_globals = getattr(module, "__dict__", None)
+
         obj_locals = dict(vars(obj))
         unwrap = obj
     elif isinstance(obj, types.ModuleType):
@@ -143,7 +216,16 @@ def eval_in_context(annot: str, obj: object) -> typing.Any:
             obj_globals = unwrap.__globals__
 
     assert isinstance(annot, str)
-    return eval(annot, obj_globals, obj_locals)
+
+    try:
+        return eval(annot, obj_globals, obj_locals)
+    except NameError as e:
+        # Try executing TYPE_CHECKING-only imports in the module context.
+        module = get_module_of_obj(obj)
+        if module is not None and _apply_type_checking_imports(module):
+            obj_globals = getattr(module, "__dict__", None)
+            return eval(annot, obj_globals, obj_locals)
+
 
 
 def maybe_eval_in_context(annot: str, obj: object) -> typing.Any:
