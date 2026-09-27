@@ -577,7 +577,7 @@ def is_subtype(left: TypeForm, right: TypeForm) -> bool:
 
     if right_origin is typing.Literal or right_origin is typing_extensions.Literal:
         if left_origin is typing.Literal or left_origin is typing_extensions.Literal:
-            return all(left_arg in right_args for left_arg in left_args)
+            return all(is_subtype_instance(left_arg, right) for left_arg in left_args)
         return False
 
     if left_origin is typing.Literal or left_origin is typing_extensions.Literal:
@@ -839,7 +839,7 @@ def is_subtype_instance(inst: typing.Any, typ: TypeForm) -> bool:
     if origin is typing.Union:
         return any(is_subtype_instance(inst, t) for t in args)
     if origin is typing.Literal or origin is typing_extensions.Literal:
-        return inst in args
+        return any(type(inst) is type(arg) and inst == arg for arg in args)
 
     if origin is typing.LiteralString:
         return isinstance(inst, str)

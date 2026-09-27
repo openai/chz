@@ -406,6 +406,25 @@ def test_is_subtype_instance_union():
         assert is_subtype_instance(["str", 1], list[int | str])
 
 
+@pytest.mark.parametrize(
+    "left,right,expected",
+    [
+        (typing.Literal[0], typing.Literal[False], False),
+        (typing.Literal[False], typing.Literal[0], False),
+        (typing.Literal[1], typing.Literal[True], False),
+        (typing.Literal[True], typing.Literal[1], False),
+        (typing.Literal[0, False], typing.Literal[0], False),
+        (typing.Literal[0], typing.Literal[0, False], True),
+        (typing.Literal[False], typing.Literal[0, False], True),
+        (typing.Literal[0, False], typing.Literal[0, False], True),
+        (typing.Literal[True], int, True),
+        (typing.Literal[1], bool, False),
+    ],
+)
+def test_is_subtype_literal_preserves_value_type(left, right, expected):
+    assert is_subtype(left, right) is expected
+
+
 def test_is_subtype_instance_callable() -> None:
     # lambda / untyped subtyping
     assert is_subtype_instance(lambda: None, typing.Callable)
