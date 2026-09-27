@@ -1,5 +1,6 @@
 import math
 import re
+from enum import IntEnum, StrEnum
 from typing import Generic, TypeVar
 
 import pytest
@@ -7,6 +8,54 @@ import pytest
 import chz
 
 T = TypeVar("T")
+
+
+class LiteralNumber(IntEnum):
+    ONE = 1
+
+
+class LiteralText(StrEnum):
+    AUTO = "auto"
+
+
+@pytest.mark.parametrize(
+    "literal,invalid",
+    [
+        (0, False),
+        (1, True),
+        (False, 0),
+        (True, 1),
+        (1, 1.0),
+        (LiteralNumber.ONE, 1),
+        (1, LiteralNumber.ONE),
+        (LiteralText.AUTO, "auto"),
+        ("auto", LiteralText.AUTO),
+    ],
+)
+def test_typecheck_literal_requires_matching_type(literal, invalid):
+    from typing import Literal
+
+    @chz.chz(typecheck=True)
+    class Config:
+        value: Literal[literal]
+
+    original = Config(value=literal)
+    assert original.value is literal
+    with pytest.raises(TypeError, match="Expected X_value to be Literal"):
+        Config(value=invalid)
+    with pytest.raises(TypeError, match="Expected X_value to be Literal"):
+        chz.replace(original, value=invalid)
+
+
+def test_typecheck_literal_explicit_mixed_types():
+    from typing import Literal
+
+    @chz.chz(typecheck=True)
+    class Config:
+        value: Literal[0, False, LiteralNumber.ONE, "auto", None]
+
+    for value in (0, False, LiteralNumber.ONE, "auto", None):
+        assert Config(value=value).value is value
 
 
 def test_validate_readme():
