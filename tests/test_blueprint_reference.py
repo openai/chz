@@ -68,6 +68,38 @@ def test_blueprint_reference_nested():
     assert obj == A(a=5, b=B(b=5, c=C(c=5)))
 
 
+@pytest.mark.parametrize("target", ["a", "c"])
+def test_blueprint_reference_constructs_target_once(target):
+    calls = []
+
+    def make_value() -> list[int]:
+        calls.append(None)
+        return [len(calls)]
+
+    @chz.chz
+    class Main:
+        a: list[int]
+        b: list[int]
+        c: list[int]
+
+    other = "c" if target == "a" else "a"
+    blueprint = chz.Blueprint(Main).apply(
+        {target: make_value, "b": Reference(target), other: Reference("b")}
+    )
+
+    obj = blueprint.make()
+    assert calls == [None]
+    assert obj.a is obj.b is obj.c
+    assert obj.a == [1]
+
+    # Memoization belongs to a single construction, not to the Blueprint.
+    another = blueprint.make()
+    assert calls == [None, None]
+    assert another.a is another.b is another.c
+    assert another.a == [2]
+    assert another.a is not obj.a
+
+
 def test_blueprint_reference_wildcard():
     @chz.chz
     class B:

@@ -74,6 +74,7 @@ def evaluate(value_mapping: dict[str, Evaluatable]) -> Any:
                         e.add_note(f" (when evaluating argument {k!r} for {type_repr(value.fn)})")
                         raise
                 ret = value.fn(**kwargs)
+                value_mapping[ref] = Value(ret)
                 return ret
         finally:
             item = refs_in_progress.popitem()
